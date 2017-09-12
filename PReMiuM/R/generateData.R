@@ -259,6 +259,7 @@ generateSampleDataFile<-function(clusterSummary){
 		}else if (outcomeType == 'MVN'){
 			Y[i,] <-rmvnorm(1, mu, theta$Sigma)
 		}else if(outcomeType == 'Longitudinal'){ ##//RJ generate longitudinal data
+			nOutcomes <- length(theta$mu)
 			longYmu[[k]][[i]] <- theta$mu
 			if(clusterSummary$randomTimes==T){
 				longT[[k]][[i]] <- rmvnorm(1,clusterSummary$timepoints,0.001*diag(nOutcomes))
