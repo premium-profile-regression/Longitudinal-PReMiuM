@@ -2143,14 +2143,14 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 				//RJ Print MVN parameters for each cluster
 					for(unsigned int c=0;c<maxNClusters;c++){
 						for(unsigned int l=0;l<nOutcomes;l++){
-							*(outFiles[MVNmuInd]) << "";//RJ!!params.MVNmu(c,l);
+							*(outFiles[MVNmuInd]) << params.MVNmu(c,l);
 							if(c<maxNClusters-1 || l<(nOutcomes-1)){
 								*(outFiles[MVNmuInd]) << " ";
 							}else{
 								*(outFiles[MVNmuInd]) << endl;
 							}
 							for(unsigned int l2=0;l2<=l;l2++){
-								*(outFiles[MVNSigmaInd]) << "";//RJ!!params.MVNSigma(c,l,l2);
+								*(outFiles[MVNSigmaInd]) << params.MVNSigma(c,l,l2);
 								if(c<maxNClusters-1 || l2<(nOutcomes-1)){
 									*(outFiles[MVNSigmaInd]) << " ";
 								}else{

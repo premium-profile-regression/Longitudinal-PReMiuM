@@ -3324,10 +3324,10 @@ void gibbsForZ(mcmcChain<pReMiuMParams>& chain,
                 //save original cluster label
                 origZi = currentParams.z(i);
 				for(unsigned int c=0;c<maxNClusters;c++){
-					if(u[i]<testBound[c]){
+					if(i==0&&outcomeType.compare("Longitudinal")==0)//for first person, calculate all marginals
+                        clusterMarginal[c] = logPYiGivenZiWi(currentParams,dataset,nFixedEffects,c,nSubjects);
+                    if(u[i]<testBound[c]){
 						if(outcomeType.compare("Longitudinal")==0){//RJ marginal likelihood without i
-                            if(i==0)//for first person, calculate all marginals
-                                clusterMarginal[c] = logPYiGivenZiWi(currentParams,dataset,nFixedEffects,c,nSubjects);
                             if(origZi == c){
                                 //if point currently in cluster:
                                 //marginal(cluster with gene) = clusterMarginal[c]
