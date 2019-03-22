@@ -2535,7 +2535,7 @@ double logPYiGivenZiWiLongitudinal(const pReMiuMParams& params, const pReMiuMDat
 				timesk[counter+j] = times[tStart[i]-1+j];
 				meanVec(counter+j) = 0.0;
 				for(unsigned int b=0;b<nFixedEffects;b++){
-					yk(counter+j)+=params.beta(b,0)*dataset.W(i,b);
+					yk(counter+j) -= params.beta(b,0)*dataset.W(i,b);
 				}
 			}
 			//RJ tidy up vector copying
