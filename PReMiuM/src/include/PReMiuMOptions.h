@@ -73,6 +73,9 @@ class pReMiuMOptions{
 
 			// Profile regression variables
 			_outcomeType="Bernoulli";
+			_kernelType="SQexponential"; //AR
+			_sampleGPmean=false; //AR
+			_ratio=0; //AR
 			_covariateType="Discrete";
 			_includeResponse = true;
 			_whichLabelSwitch = "123";
@@ -167,6 +170,8 @@ class pReMiuMOptions{
 			_seed=rndSeedNew;
 		}
 
+
+
 		/// \brief Return the input file name
 		string inFileName() const{
 			return _inFileName;
@@ -218,6 +223,16 @@ class pReMiuMOptions{
 			_outcomeType=outType;
 		}
 
+		/// \brief Return the kernel type //AR
+		string kernelType() const{
+		  return _kernelType;
+		}
+
+		/// \brief Set the outcome type //AR
+		void kernelType(const string& outType){
+		  _kernelType=outType;
+		}
+
 		/// \brief Return the covariate type
 		string covariateType() const{
 			return _covariateType;
@@ -236,7 +251,23 @@ class pReMiuMOptions{
 
 		/// \brief Set whether we are including the response
 		void includeResponse(const bool& incResp){
-			_includeResponse=incResp;
+		  _includeResponse=incResp;
+		}
+
+		void sampleGPmean(const bool& incResp){//AR
+			_sampleGPmean=incResp;
+		}
+
+		bool sampleGPmean() const{
+		  return _sampleGPmean;
+		}
+
+		void ratio(const double& incResp){//AR
+		  _ratio=incResp;
+		}
+
+		double ratio() const{
+		  return _ratio;
 		}
 
 		/// \brief Return which label switch moves are implemented
@@ -379,8 +410,11 @@ class pReMiuMOptions{
 			_nClusInit=options.nClusInit();
 			_seed=options.seed();
 			_outcomeType=options.outcomeType();
+			_kernelType=options.kernelType();//AR
 			_covariateType=options.covariateType();
 			_includeResponse=options.includeResponse();
+			_sampleGPmean=options.sampleGPmean();//AR
+			_ratio=options.ratio();//AR
 			_whichLabelSwitch=options.whichLabelSwitch();
 			_fixedAlpha=options.fixedAlpha();
 			_dPitmanYor=options.dPitmanYor();
@@ -423,11 +457,17 @@ class pReMiuMOptions{
 		long _seed;
 		// The model for the outcome
 		string _outcomeType;
+		// The model for the kernel
+		string _kernelType;
 		// The model for the covariates
 		string _covariateType;
 		// This notes whether we are including the response
 		bool _includeResponse;
+		// This notes whether we are sampling the GP mean if yModel == Longitudinal
+		bool _sampleGPmean;
 		// This notes which label switching moves are run
+		double _ratio;
+		// Ratio between L1k and L3k defining the variance of the GP
 		string _whichLabelSwitch;
 		// This has a fixed value of alpha (if negative we update alpha)
 		double _fixedAlpha;

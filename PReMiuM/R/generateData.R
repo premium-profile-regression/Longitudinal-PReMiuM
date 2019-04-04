@@ -27,6 +27,7 @@
 generateSampleDataFile<-function(clusterSummary){
 
 	subjectsPerCluster<-clusterSummary$clusterSizes
+	kernelType <- clusterSummary$kernelType # //AR
 	nSubjects<-sum(subjectsPerCluster)
 	IDs <- 1:nSubjects
 	covariateType<-clusterSummary$covariateType
@@ -43,7 +44,7 @@ generateSampleDataFile<-function(clusterSummary){
 	if (is.null(nCategoriesY)) nCategoriesY<-1
 	includeCAR=clusterSummary$includeCAR
 	nClusters=length(subjectsPerCluster)
-   
+
 	# Clustering covariates X
 	X<-matrix(NA,nSubjects,nCovariates)
 
@@ -58,7 +59,7 @@ generateSampleDataFile<-function(clusterSummary){
 		VectoSample=sample(VectoSample,nSubjects,replace=FALSE)
 	}
 
-	
+
 	# Loop over subjects
 	for(i in 1:nSubjects){
 		if (includeCAR){
@@ -72,7 +73,7 @@ generateSampleDataFile<-function(clusterSummary){
 				subjectsPerCluster[k]<-subjectsPerCluster[k]+subjectsPerCluster[k-1]
 			}
 		}
-      
+
 		# Loop over covariates to generate the X data
 		if(covariateType=='Discrete'){
 			for(j in 1:nCovariates){
@@ -119,7 +120,7 @@ generateSampleDataFile<-function(clusterSummary){
 			}
 		}
 	}
-	
+
 	# Fixed Effects W
 	if(nFixedEffects>0){
 		W<-matrix(rnorm(nSubjects*nFixedEffects,0,1),nSubjects,nFixedEffects)
@@ -138,11 +139,11 @@ generateSampleDataFile<-function(clusterSummary){
 		U=rnorm(nSubjects-1,0,1)
 		U=U*(1/sqrt(l[1:(nSubjects-1)]))
 		U=as.vector(e[,1:(nSubjects-1)]%*%matrix(U,ncol=1))
-		U=U/sqrt(tau)    
+		U=U/sqrt(tau)
 	} else {
 		U=rep(0,nSubjects)
 	}
-	
+
 	outcomeType<-clusterSummary$outcomeType
 	# Response Vector Y
 	Y<-rep(0,nSubjects)
@@ -164,7 +165,7 @@ generateSampleDataFile<-function(clusterSummary){
 			beta<-as.matrix(clusterSummary$fixedEffectsCoeffs,nrow=1)
 		}
 	}
-	
+
    	if (outcomeType=='Survival'){
 		shape=clusterSummary$shape # shape parameter of the Weibull - constant across clusters
 		censorT = clusterSummary$censorT # time to censor the outcomes
@@ -176,8 +177,8 @@ generateSampleDataFile<-function(clusterSummary){
 	}else{
 		offset<-NULL
 	}
-   
-	if(outcomeType=='Binomial'){	
+
+	if(outcomeType=='Binomial'){
 		nTrials<-sample(clusterSummary$nTrialsLims[1]:clusterSummary$nTrials[2],nSubjects,replace=T)
 	}else{
 		nTrials<-NULL
@@ -197,10 +198,10 @@ generateSampleDataFile<-function(clusterSummary){
 	k<-1
 	# Loop over subjects
 	for(i in 1:nSubjects){
-            
+
 		if (includeCAR){
 			theta<-clusterSummary$clusterData[[VectoSample[i]]]$theta
-		}else{        
+		}else{
 			if(i<=subjectsPerCluster[k]){
 				theta<-clusterSummary$clusterData[[k]]$theta
 				if (outcomeType=="Survival") shapeTmp<-clusterSummary$shape[k]
@@ -217,14 +218,14 @@ generateSampleDataFile<-function(clusterSummary){
 			mu <- theta$mu
 		}
 		if(nFixedEffects>0){
-			if (outcomeType=='Categorical'){			
+			if (outcomeType=='Categorical'){
 				for (kk in 2:nCategoriesY){
 					mu[kk]<-mu[kk]+sum(beta[kk,]*W[i,])
 				}
 			} else {
 				mu<-mu+sum(beta*W[i,])
 			}
-		} 
+		}
 		if(outcomeType=='Poisson'){
 			mu<-mu+U[i]
 			mu<-mu+log(offset[i])
@@ -237,20 +238,20 @@ generateSampleDataFile<-function(clusterSummary){
 				Y[i]<-0
 			}
 		}else if(outcomeType=='Binomial'){
-			p<-1/(1+exp(-mu))	
+			p<-1/(1+exp(-mu))
 			Y[i]<-sum(runif(nTrials[i])<p)
 		}else if(outcomeType=='Normal'){
 			Y[i]<-rnorm(1,mu+U[i],sqrt(sigmaSqY))
 		}else if (outcomeType=='Categorical'){
 			p<-vector()
-			sumMu<-sum(exp(mu))		
+			sumMu<-sum(exp(mu))
 			p[1]<-1/sumMu
 			for (kk in 2:nCategoriesY) p[kk]<-exp(mu[kk])/sumMu
 			Y[i]<-which(rmultinom(1,1,p)==1)-1
 		}else if (outcomeType == 'Survival'){
-			Y[i] <-rWEI2(1, exp(mu), shapeTmp)#rlnorm(1,exp(mu),shapeTmp)#  #rweibull(1,exp(mu),shapeTmp)         #scale = exp(mu) 
-			if (Y[i] >  censorT){  
-				Y[i] <- censorT 
+			Y[i] <-rWEI2(1, exp(mu), shapeTmp)#rlnorm(1,exp(mu),shapeTmp)#  #rweibull(1,exp(mu),shapeTmp)         #scale = exp(mu)
+			if (Y[i] >  censorT){
+				Y[i] <- censorT
 				event[i] <- 0
 			} else {
 				Y[i] <- Y[i]
@@ -275,12 +276,12 @@ generateSampleDataFile<-function(clusterSummary){
 				}
 			}
 			longIDs[[i]] <- rep(IDs[i],times=length(longT[[k]][[i]]))
-		
+
 		}
 	}
 	if(outcomeType == 'Longitudinal'){ ##//RJ generate longitudinal data
 		for(k in 1:length(clusterSummary$clusterData)){
-			Sigma <- GP_cov(unlist(as.vector(longT[[k]])),exp(theta$L))
+			Sigma <- GP_cov(unlist(as.vector(longT[[k]])),exp(theta$L),kernelType)
 			longY[[k]] <- rmvnorm(1,unlist(as.vector(longYmu[[k]])),Sigma)
 		}
 		Tvalues <- unlist(unlist(as.vector(longT)))
@@ -308,7 +309,7 @@ generateSampleDataFile<-function(clusterSummary){
 		}
 	}
 	colnames(outData) <- c("ID",colnamesoutData,covNames)
-	
+
 	out<-list(inputData=outData,covNames=covNames,outcome=colnamesoutData,xModel=covariateType,yModel=outcomeType)
 	out$nCovariates <- nCovariates
 	##//RJ make longitudinal outcome dataframe
@@ -319,7 +320,7 @@ generateSampleDataFile<-function(clusterSummary){
 		out$inputLongData <- outLongData
 	}
 	##//
-	
+
 	if (covariateType=="Mixed"){
 		discreteCovs<-covNames[1:nDiscreteCovs]
 		continuousCovs<-covNames[(nDiscreteCovs+1):nCovariates]
@@ -343,14 +344,14 @@ generateSampleDataFile<-function(clusterSummary){
 	}
 	if(clusterSummary$outcomeType=="Binomial"){
 		outData<-data.frame(cbind(outData,nTrials))
-		out$inputData <- outData	
+		out$inputData <- outData
 		colnames(outData) <- c("ID","outcome",covNames,fixEffNames,"outcomeT")
 		out$inputData <- outData
 		out$outcomeT <- "outcomeT"
 	}
 	if(clusterSummary$outcomeType=="Survival"){
 		outData<-data.frame(cbind(outData,event))
-		out$inputData <- outData	
+		out$inputData <- outData
 		colnames(outData) <- c("ID","outcome",covNames,fixEffNames, "event")
 		out$inputData <- outData
 		out$shape <- shape
@@ -523,14 +524,16 @@ clusSummaryMVNDiscrete<-function(nOutcomes=3){##//RJ summary generation function
                       ))
 }
 
-clusSummaryLongitudinalDiscrete<-function(){##//RJ summary generation function Longitudinal
-        list(
+clusSummaryLongitudinalDiscrete<-function(ng=2){##//RJ summary generation function Longitudinal
+    if(ng==2){
+      liste <- list(
    'outcomeType'='Longitudinal',
    'covariateType'='Discrete',
+   'kernelType'="SQexponential",
    'nCovariates'=5,
    'timeGaps'=F,
    'randomTimes'=F,
-   'timepoints'=c(0,2,4),
+   'timepoints'=c(0,2,4,6,8,10,12),
    'nCategories'=c(3,3,3,3,3),
    'nFixedEffects'=0,
    'fixedEffectsCoeffs'=c(),
@@ -540,14 +543,14 @@ clusSummaryLongitudinalDiscrete<-function(){##//RJ summary generation function L
    'clusterSizes'=c(30,30),##//RJ
    'includeCAR'=FALSE,
    'TauCAR'=100,
-   'clusterData'=list(list('theta'=list('mu'=c(9,8.5,7),
+   'clusterData'=list(list('theta'=list('mu'=c(9,8.5,7,6,5,4,3),
 			  	        			    'L'=c(-0.5,-0.1,-0.5)),
                            'covariateProbs'=list(c(0.8,0.1,0.1),
                                                  c(0.8,0.1,0.1),
                                                  c(0.8,0.1,0.1),
                                                  c(0.8,0.1,0.1),
                                                  c(0.8,0.1,0.1))),
-                      list('theta'=list('mu'=c(9,7,6),
+                      list('theta'=list('mu'=c(9,7,6,4,2,1,0),
 			  	        			    'L'=c(-0.5,-0.1,-0.5)),
                            'covariateProbs'=list(c(0.1,0.8,0.1),
                                                  c(0.1,0.8,0.1),
@@ -555,6 +558,111 @@ clusSummaryLongitudinalDiscrete<-function(){##//RJ summary generation function L
                                                  c(0.1,0.8,0.1),
                                                  c(0.1,0.1,0.8)))
                       ))
+  }else if(ng==3){
+    liste <- list(
+      'outcomeType'='Longitudinal',
+      'covariateType'='Discrete',
+      'kernelType'="SQexponential",
+      'nCovariates'=5,
+      'timeGaps'=F,
+      'randomTimes'=F,
+      'timepoints'=c(0,2,4,6,8,10,12),
+      'nCategories'=c(3,3,3,3,3),
+      'nFixedEffects'=0,
+      'fixedEffectsCoeffs'=c(),
+      'sigmaSqY'=1,
+      'missingDataProb'=0,
+      'nClusters'=5,
+      'clusterSizes'=c(10,30,50),##//RJ
+      'includeCAR'=FALSE,
+      'TauCAR'=100,
+      'clusterData'=list(list('theta'=list('mu'=c(9,8.5,7,6,5,4,3),
+                                           'L'=c(-0.5,-0.1,-0.5)),
+                              'covariateProbs'=list(c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1))),
+                         list('theta'=list('mu'=c(9,7,6,4,2,1,0),
+                                           'L'=c(-0.6,-0.2,-0.1)),
+                              'covariateProbs'=list(c(0.1,0.8,0.1),
+                                                    c(0.1,0.8,0.1),
+                                                    c(0.1,0.8,0.1),
+                                                    c(0.1,0.8,0.1),
+                                                    c(0.1,0.1,0.8))),
+                         list('theta'=list('mu'=c(7,5,8,9,10,11,9),
+                                           'L'=c(-0.1,-0.3,-0.7)),
+                              'covariateProbs'=list(c(0.4,0.5,0.1),
+                                                    c(0.5,0.4,0.1),
+                                                    c(0.1,0.4,0.5),
+                                                    c(0.5,0.1,0.4),
+                                                    c(0.5,0.3,0.2)))
+      ))
+  }else if(ng==1){
+
+    liste <- list(
+      'outcomeType'='Longitudinal',
+      'covariateType'='Discrete',
+      'kernelType'="SQexponential",
+      'nCovariates'=5,
+      'timeGaps'=F,
+      'randomTimes'=F,
+      'timepoints'=c(0,2,4,6,8,10,12),
+      'nCategories'=c(3,3,3,3,3),
+      'nFixedEffects'=0,
+      'fixedEffectsCoeffs'=c(),
+      'sigmaSqY'=1,
+      'missingDataProb'=0,
+      'nClusters'=5,
+      'clusterSizes'=100,##//RJ
+      'includeCAR'=FALSE,
+      'TauCAR'=100,
+      'clusterData'=list(list('theta'=list('mu'=c(9,8.5,7,6,5,4,3),
+                                           'L'=c(-0.5,-0.1,-0.5)),
+                              'covariateProbs'=list(c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1),
+                                                    c(0.8,0.1,0.1)))
+      ))
+
+  }
+  return(liste)
+}
+
+clusSummaryLongitudinalDiscrete_Quadratic_kernel<-function(){##//RJ summary generation function Longitudinal
+  list(
+    'outcomeType'='Longitudinal',
+    'covariateType'='Discrete',
+    'kernelType'="Quadratic",
+    'nCovariates'=5,
+    'timeGaps'=F,
+    'randomTimes'=F,
+    'timepoints'=c(0,2,4,6,8,10,12),
+    'nCategories'=c(3,3,3,3,3),
+    'nFixedEffects'=0,
+    'fixedEffectsCoeffs'=c(),
+    'sigmaSqY'=1,
+    'missingDataProb'=0,
+    'nClusters'=5,
+    'clusterSizes'=c(30,30),##//RJ
+    'includeCAR'=FALSE,
+    'TauCAR'=100,
+    'clusterData'=list(list('theta'=list('mu'=rep(0,7),
+                                         'L'=c(0.05,-3,-4,1.04)),
+                            'covariateProbs'=list(c(0.8,0.1,0.1),
+                                                  c(0.8,0.1,0.1),
+                                                  c(0.8,0.1,0.1),
+                                                  c(0.8,0.1,0.1),
+                                                  c(0.8,0.1,0.1))),
+                       list('theta'=list('mu'=rep(0,7),
+                                         'L'=c(0.5,-2,-4,2.07)),
+                            'covariateProbs'=list(c(0.1,0.8,0.1),
+                                                  c(0.1,0.8,0.1),
+                                                  c(0.1,0.8,0.1),
+                                                  c(0.1,0.8,0.1),
+                                                  c(0.1,0.1,0.8)))
+    ))
 }
 
 clusSummaryNormalDiscrete<-function(){
@@ -700,7 +808,7 @@ clusSummaryBinomialNormal<-function(){
 			'covariateMeans'=c(10,-5),
 			'covariateCovariance'=matrix(c(2,0.7,0.7,1),nrow=2))))
 }
-	
+
 clusSummaryNormalNormal<-function(){
 	list(
 	'outcomeType'='Normal',
@@ -827,7 +935,7 @@ clusSummaryBernoulliMixed<-function(){
 			'covariateCovariance'=matrix(c(2,0.9,0.9,1),nrow=2))))
 }
 
-			
+
 clusSummaryBernoulliDiscreteSmall<-function(){
 	list(
 	'outcomeType'='Bernoulli',
@@ -873,7 +981,7 @@ clusSummaryBernoulliDiscreteSmall<-function(){
 			c(0.1,0.1,0.8)))))
 }
 
-			
+
 clusSummaryBernoulliNormal<-function(){
 	list(
 	'outcomeType'='Bernoulli',
@@ -904,33 +1012,33 @@ clusSummaryBernoulliNormal<-function(){
 }
 
 
-clusSummaryWeibullDiscrete<-function(){                
+clusSummaryWeibullDiscrete<-function(){
 	list(
 	'outcomeType'='Survival',
 	'covariateType'='Discrete',
 	'nCovariates'=5,
 	'nCategories'=c(2,2,3,3,4),
-	'nFixedEffects'=1,                                      
+	'nFixedEffects'=1,
 	'fixedEffectsCoeffs'=c(0),
 	'shape'=c(2,2.4,3),
-	'censorT'=50,                                                                  
+	'censorT'=50,
 	'missingDataProb'=0,
-	'nClusters'=3,                                      
+	'nClusters'=3,
 	'clusterSizes'=c(250,250,250),
 	'includeCAR'=FALSE,
-	'clusterData'=list(list('theta'=log(0.01),                   
+	'clusterData'=list(list('theta'=log(0.01),
 		'covariateProbs'=list(c(0.8,0.2),
 			c(0.8,0.2),
 			c(0.8,0.1,0.1),
 			c(0.8,0.1,0.1),
 			rep(0.25,4))),
-		list('theta'=log(0.001),            
+		list('theta'=log(0.001),
 		'covariateProbs'=list(c(0.8,0.2),
 			c(0.2,0.8),
 			c(0.1,0.1,0.8),
 			c(0.1,0.8,0.1),
 			rep(0.25,4))),
-		list('theta'= log(0.005),  
+		list('theta'= log(0.005),
 		'covariateProbs'=list(c(0.2,0.8),
 			c(0.2,8),
 			c(0.1,0.1,0.8),
@@ -968,7 +1076,7 @@ mapforGeneratedData=function(u, del=NULL, palette='RGB', main=''){
 	if(is.null(del)){
 		deltot=seq(range(u,na.rm=TRUE)[1],range(u,na.rm=TRUE)[2],length.out=100)
 		deltot[1]<-deltot[1]-(deltot[2]-deltot[1])/100
-		deltot[length(deltot)]<-deltot[length(deltot)]+(deltot[length(deltot)]-deltot[length(deltot)-1])/100  
+		deltot[length(deltot)]<-deltot[length(deltot)]+(deltot[length(deltot)]-deltot[length(deltot)-1])/100
 		labs=c(seq(1,length(deltot),20),length(deltot))
 	}else{
 		labs=c(1)
@@ -982,8 +1090,8 @@ mapforGeneratedData=function(u, del=NULL, palette='RGB', main=''){
 	}
 	pardef=par(no.readonly=TRUE)
 	par(mar=c(4,4,4,8),tck=0.02,mgp=c(3,0.2,0),las=1)
-       
-	#Begin plot      
+
+	#Begin plot
 	plot.new()
 	plot.window(xlim=range(lagS),ylim=range(lagT),xlab="oui", ylab="non")
 	for ( s in 1:length(mat[1,])){
@@ -991,14 +1099,14 @@ mapforGeneratedData=function(u, del=NULL, palette='RGB', main=''){
 			rect(xleft=lagS[s],xright=lagS[s+1],ybottom=lagT[t],ytop=lagT[t+1],col=paletteBleue(length(deltot-1))[findInterval(mat[t,s],deltot,all.inside=TRUE)],border=NA)
     		}
 	}
-                    
+
 	axis(1, at=lagS[seq(1,length(lagS),2)],labels=as.character(lagS[seq(1,length(lagS),2)]),tick=TRUE, pos=c(lagS[1],lagT[1]), padj=0, cex.axis=1)
 	axis(2, at=lagT[seq(1,length(lagT),2)],labels=as.character(lagT[seq(1,length(lagT),2)]),tick=TRUE,pos=c(lagS[1],lagT[1]), cex.axis=1)
 	axis(3, at=lagS[seq(1,length(lagS),2)],labels=FALSE,tick=TRUE, pos=c(lagT[length(lagT)],lagS[1]))
 	axis(4,at=lagT[seq(1,length(lagT),2)],labels=FALSE,tick=TRUE, pos=c(lagS[length(lagS)],lagT[length(lagT)]))
-	rect(xleft=range(lagS)[1],xright=range(lagS)[2],ybottom=range(lagT)[1],ytop=range(lagT)[2],border='black',lwd=1)        
+	rect(xleft=range(lagS)[1],xright=range(lagS)[2],ybottom=range(lagT)[1],ytop=range(lagT)[2],border='black',lwd=1)
 	mtext(main, side=3, line=0.5, cex=2)
-  
+
 	colors=.color.scale(paletteBleue(length(deltot)-1),deltot,name="", unit="",labels=labs)
 	.cs.draw(colors,border=NA,horiz=F, cex=1,digits=2, side=1, length=0.8, offset=0, pos=1, width = 0.06)
 	par(pardef)
@@ -1006,7 +1114,7 @@ mapforGeneratedData=function(u, del=NULL, palette='RGB', main=''){
 
 
 ########################################################################################################
-#function for producing text file with lattice neighbourhood structure that may be read 
+#function for producing text file with lattice neighbourhood structure that may be read
 
 .write_neigh=function(nSubjects, file=NULL){
   if (is.null(file)) {file='Neighbours.txt'}
@@ -1028,7 +1136,7 @@ mapforGeneratedData=function(u, del=NULL, palette='RGB', main=''){
       else if (i==nSubjects) {
         if (floor((i-1)/n)==(i-1)/n) out=c(out,paste(i,1,i-n))
         else out=c(out, paste(i,2,i-n,i-1))
-      } else {out =c(out, paste(i,3,i-n,i-1,i+1))}      
+      } else {out =c(out, paste(i,3,i-n,i-1,i+1))}
     }
   }
   writeLines(out,file)
@@ -1113,7 +1221,7 @@ mapforGeneratedData=function(u, del=NULL, palette='RGB', main=''){
         text(x1, y[1], adj = c(-0.75 * side + 0.5, 1.5), unit,
             xpd = xpd, cex = cex)
     }
-} 
+}
 
 #Function to create color.scale
 .color.scale=function(vectofcols, vectofbreaks, name="name", unit="", labels){

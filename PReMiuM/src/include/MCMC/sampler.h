@@ -308,7 +308,7 @@ template<class modelParamType,class optionType,class propParamType,class dataTyp
 
 		/// \brief The seed for the random number generator
 		unsigned int _seed;
-
+		vector<unsigned int>_seedsMult;
 		/// \var _nSweeps
 		/// \brief The number of sweeps that we are running the sampler for
 
@@ -527,7 +527,6 @@ void mcmcSampler<modelParamType,optionType,propParamType,dataType>::run(){
 
 	// This is the main sampler
 	// We loop over the sweeps
-
 	// Write the output of initialisation before sampler begins
 	writeOutput(0);
 	for(unsigned int sweep=1; sweep<=_nBurn+_nSweeps; sweep++){
@@ -536,29 +535,28 @@ void mcmcSampler<modelParamType,optionType,propParamType,dataType>::run(){
 		}
 		// Update the missing data (this will only do anything if the
 		// _model.hasMissingData flag is true)
+
 		updateMissingData();
 
 		// At each sweep we loop over the proposals
 		typename vector<mcmcProposal<modelParamType,optionType,propParamType,dataType> >::iterator it;
 		for(it=_proposalVec.begin(); it<_proposalVec.end(); it++){
+
 			// Only use this proposal if it is due to be tried at this sweep
-			if(sweep >= it->proposalFirstSweep() && sweep % it->proposalFrequency()==0){
+			if(sweep >= it->proposalFirstSweep() && sweep % it->proposalFrequency()==0 ){
 				// Only try this proposal with probability as defined
 				if(unifRand(_rndGenerator)<it->proposalWeight()){
 					// Update the chain state
 					it->updateParameters(_chain,_model,_rndGenerator);
-					//Rprintf("%s\n",it->proposalName().c_str());
+					//Rprintf("prop ",it->proposalName().c_str(),"\n");
 				}
 			}
-
 		}
-
 		// At the end of the sweep make sure the log posterior is up to date.
 		_chain.currentState().logPosterior(_model.logPosterior(_chain.currentState().parameters()));
 
 		// Now write the output (this is controlled by the user defined function
 		writeOutput(sweep);
-
 	}
 	writeAcceptanceRates();
 

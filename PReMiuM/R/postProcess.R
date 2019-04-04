@@ -26,33 +26,35 @@
 is.wholenumber <- function(x, tol = .Machine$double.eps^0.5)  abs(x - round(x)) < tol
 
 profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, data, longData=NULL,
-                   output="output", hyper, predict, predictType="RaoBlackwell", nSweeps=1000, 
-                   nBurn=1000, nProgress=500, nFilter=1, nClusInit, seed, yModel="Bernoulli", 
-                   xModel="Discrete", sampler="SliceDependent", alpha=-2, dPitmanYor=0, excludeY=FALSE, extraYVar=FALSE, 
-                   varSelectType="None", entropy,reportBurnIn=FALSE, run=TRUE, discreteCovs, continuousCovs, 
+                   output="output", hyper, predict, predictType="RaoBlackwell", nSweeps=1000,
+                   nBurn=1000, nProgress=500, nFilter=1, nClusInit, seed, yModel="Bernoulli",
+                   xModel="Discrete", sampler="SliceDependent", alpha=-2, dPitmanYor=0, excludeY=FALSE, extraYVar=FALSE,
+                   varSelectType="None", entropy,reportBurnIn=FALSE, run=TRUE, discreteCovs, continuousCovs,
                    whichLabelSwitch="123", includeCAR=FALSE, neighboursFile="Neighbours.txt",
-                   weibullFixedShape=TRUE, useNormInvWishPrior=FALSE){
-  
+                   weibullFixedShape=TRUE, useNormInvWishPrior=FALSE,kernel="SQexponential", sampleGPmean= FALSE, ratio_v= 0){
+
   # suppress scientific notation
   options(scipen=999)
-  
+
   if (xModel=="Mixed"){
     covNames <- c(discreteCovs, continuousCovs)
     nDiscreteCovs <- length(discreteCovs)
     nContinuousCovs <- length(continuousCovs)
   }
   nCovariates<-length(covNames)
-  
+
   if (!is.data.frame(data)) stop("Input data must be a data.frame with outcome, covariates and fixed effect names as column names.")
   ##//RJ extra variation and longitudinal data mutually exclusive
   if (extraYVar==TRUE&(yModel=="Categorical"||yModel=="Normal"||yModel=="Survival"||yModel=="Longitudinal")) stop("Option extraYVar is only available for Bernoulli, Binomial and Poisson response.")
-  
+
   if (includeCAR==TRUE&(yModel=="Categorical"||yModel=="Survival"||yModel=="Bernoulli"||yModel=="Binomial")) stop("Option includeCAR is only available for Poisson and Normal response.")
-  
+
+  if (kernel!="SQexponential" && kernel!="Quadratic") stop("Option kernelType for Gaussian Process should be either SQexponential or Quadratic.")
+
   if (predictType=="random"){
     if (yModel!="Normal") stop("The option of random predictions is only available for yModel=Normal.")
   }
-  
+
   if (useNormInvWishPrior==TRUE && !varSelectType=="None") stop("Variable selection is not available for Normal-inverse-Wishart prior for Normal covariates.")
   ##//RJ sort data sets by IDs
   if(length(longData)>0){
@@ -60,7 +62,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
       stop("Please provide longData as a data.frame with columns 'ID', 'time' and 'outcome'.")
     }
     IDlist <- longData$ID
-    IDs <- unique(IDlist)	
+    IDs <- unique(IDlist)
     if (length(which(colnames(data)=='ID'))<1 && yModel == 'Longitudinal') {
       print("No ID column in data; assuming the same ordering as in longData.")
       if(length(IDs)!=dim(data)[1]){
@@ -74,10 +76,10 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     data <- data[with(data, order(ID)), ]
     longData <- longData[with(longData, order(ID)), ]
   }
-  
+
   # open file to write output
   fileName<-paste(output,"_input.txt",sep="")
-  # make big data matrix with outcome, covariates and fixed effects	
+  # make big data matrix with outcome, covariates and fixed effects
   # outcome
   # create outcome if excludeY=TRUE and outcome not provided
   nOutcomes <- 1
@@ -88,17 +90,17 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     nOutcomes <- length(which(colnames(data)%in%outcome))
   	dataMatrix<-data[,which(colnames(data)%in%outcome)]
   }
-  
+
   if (sum(is.na(dataMatrix))>0) stop("ERROR: the outcome cannot have missing values. Use the profiles with missing outcome for predictions.")
-  
+
   if (length(dataMatrix)==0) stop("ERROR: the outcome provided is not one of the names of the variables in the dataframe.")
-  
+
   # recode outcome covariates
   if (yModel=="Categorical"||yModel=="Bernoulli"){
     outcomeY<-dataMatrix
     outcomeFactor<-as.factor(outcomeY)
     yLevels<-length(levels(outcomeFactor))
-    if (yModel=="Bernoulli"&yLevels>2) stop("The number of levels of the outcome is greater than 2, which is not allowed for Bernoulli outcome. You might want to set yModel to be Categorical.") 
+    if (yModel=="Bernoulli"&yLevels>2) stop("The number of levels of the outcome is greater than 2, which is not allowed for Bernoulli outcome. You might want to set yModel to be Categorical.")
     if (yModel=="Categorical") write(yLevels,fileName,append=T,ncolumns=length(yLevels))
     if (is.numeric(outcomeY)){
       if (!(min(outcomeY)==0&&max(outcomeY)==(yLevels-1)&&sum(!is.wholenumber(outcomeY))==0)) {
@@ -118,7 +120,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   } else {
     yLevels <- 1
   }
-  
+
   # covariates
   covIndeces<-vector()
   for (i in 1:nCovariates){
@@ -126,22 +128,22 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     if (length(tmpIndex)==0) stop("ERROR: covariate names in data.frame provided do not correspond to list of covariates for profile regression")
     covIndeces<-append(covIndeces,tmpIndex)
   }
-  
+
   covariates<-data[,covIndeces]
   dataMatrix<-cbind(dataMatrix,covariates)
-  
+
   # recode covariate levels
   if (xModel=="Discrete"){
     xLevels<-vector()
     for (k in 1:nCovariates){
       tmpCov<-dataMatrix[,(nOutcomes+k)]
-      xLevels[k]<-length(levels(as.factor(tmpCov)))	
+      xLevels[k]<-length(levels(as.factor(tmpCov)))
       if (!(min(tmpCov,na.rm=TRUE)==0&&max(tmpCov,na.rm=TRUE)==(xLevels[k]-1)&&sum(!is.wholenumber(tmpCov[!is.na(tmpCov)]))==0)) {
         print(paste("Recoding of covariate ",colnames(dataMatrix)[k+nOutcomes]," as follows",sep=""))
         tmpCovFactor<-as.factor(tmpCov)
         tmpLevels<-levels(tmpCovFactor)
         print(paste("Replacing level ",levels(tmpCovFactor)," with ",c(0:(xLevels[k]-1)),sep=""))
-        levels(tmpCovFactor)<-c(0:(xLevels[k]-1))	
+        levels(tmpCovFactor)<-c(0:(xLevels[k]-1))
         dataMatrix[,(nOutcomes+k)]<-tmpCovFactor
         dataMatrix[,(nOutcomes+k)]<-as.numeric(levels(dataMatrix[,(nOutcomes+k)]))[as.integer(dataMatrix[,(nOutcomes+k)])]
       }
@@ -150,13 +152,13 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     xLevels<-vector()
     for (k in 1:nDiscreteCovs){
       tmpCov<-dataMatrix[,(nOutcomes+k)]
-      xLevels[k]<-length(levels(as.factor(tmpCov)))	
+      xLevels[k]<-length(levels(as.factor(tmpCov)))
       if (!(min(tmpCov,na.rm=TRUE)==0&&max(tmpCov,na.rm=TRUE)==(xLevels[k]-1)&&sum(!is.wholenumber(tmpCov[!is.na(tmpCov)]))==0)) {
         print(paste("Recoding of covariate number ",colnames(dataMatrix)[k+nOutcomes]," as follows",sep=""))
         tmpCovFactor<-as.factor(tmpCov)
         tmpLevels<-levels(tmpCovFactor)
         print(paste("Replacing level ",levels(tmpCovFactor)," with ",c(0:(xLevels[k]-1)),sep=""))
-        levels(tmpCovFactor)<-c(0:(xLevels[k]-1))	
+        levels(tmpCovFactor)<-c(0:(xLevels[k]-1))
         dataMatrix[,(nOutcomes+k)]<-tmpCovFactor
         dataMatrix[,(nOutcomes+k)]<-as.numeric(levels(dataMatrix[,(nOutcomes+k)]))[as.integer(dataMatrix[,(nOutcomes+k)])]
       }
@@ -164,7 +166,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   } else {
     xLevels <- 1
   }
-  
+
   for (k in 1:nCovariates){
     missingX<-is.na(dataMatrix[,(k+nOutcomes)])
     nMissingX<-sum(missingX)
@@ -172,7 +174,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
       dataMatrix[missingX,(k+nOutcomes)]<- rep(-999,nMissingX)
     }
   }
-  
+
   # fixed effects
   if (!missing(fixedEffectsNames)) {
     nFixedEffects<-length(fixedEffectsNames)
@@ -186,13 +188,13 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     if (sum(is.na(fixedEffects))>0) stop("ERROR: fixed effects cannot have missing values. Use an imputation method before using profRegr().")
     dataMatrix<-cbind(dataMatrix,fixedEffects)
     for (i in dim(fixedEffects)[2]){
-      if (class(fixedEffects[,i])=="character") stop("ERROR: fixed effects must be of class numeric. See help pages.") 
+      if (class(fixedEffects[,i])=="character") stop("ERROR: fixed effects must be of class numeric. See help pages.")
     }
   } else {
     nFixedEffects<-0
     #if (yModel=="Survival") stop("ERROR: For the current implementation of Survival outcome the fixed effects must be provided. ")
   }
-  
+
   #  extra outcome data
   if (yModel=="Poisson"||yModel=="Binomial"||yModel=="Survival") {
     if(is.na(outcomeT)){
@@ -201,14 +203,14 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
       indexOutcomeT <- which(colnames(data)==outcomeT)
       if (yModel=="Survival") {
         if (!all(is.element(names(table(data[indexOutcomeT])),c("0","1")))) stop("If yModel is Survival, variable outcomeT corresponds to the censoring of the outcome. Therefore, it must be coded 0 and 1.")
-        
+
       }
       dataMatrix <- cbind(dataMatrix,data[indexOutcomeT])
     }
   } else {
     if(!is.na(outcomeT)) stop ("It is only required to set outcomeT for Poisson, Binomial and Survival outcome.")
-  }		
-  
+  }
+
   # print number of subjects
   nSubjects <- dim(dataMatrix)[1]
   write(as.character(nSubjects), fileName,ncolumns=1)
@@ -230,11 +232,11 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   if (nFixedEffects>0){
     write(t(fixedEffectsNames), fileName,append=T,ncolumns=1)
   }
-  if (yModel=="Categorical") write(yLevels,fileName,append=T,ncolumns=1) 
+  if (yModel=="Categorical") write(yLevels,fileName,append=T,ncolumns=1)
   if (xModel=="Discrete"||xModel=="Mixed"){
     write(xLevels,fileName,append=T,ncolumns=length(xLevels))
   }
-  
+
   # write prediction file
   #	if (!missing(predict)&(includeCAR)) stop ("Predictions are not available with spatial effect.")
   if (!missing(predict)) {
@@ -246,9 +248,9 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
       if (nMissingX>0) {
         predict[k,missingX]<- rep(-999,nMissingX)
       }
-    }	
+    }
     print(covNames)
-    #print(predict)	
+    #print(predict)
     write(t(as.matrix(predict[,c(covNames)])), paste(output,"_predict.txt",sep=""),append=T,ncolumns=length(covNames))
     if (length(intersect(outcome,names(predict)))>0) {
       if (nFixedEffects>0 ) {
@@ -257,7 +259,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
           if (yModel=="Poisson" || yModel=="Binomial"||yModel=="Survival"){
             write(t(as.matrix(predict[,c(outcome,fixedEffectsNames,outcomeT)])), paste(output,"_predictFull.txt",sep=""),append=T,ncolumns=(2+length(fixedEffectsNames)))
           } else {
-            write(t(as.matrix(predict[,c(outcome,fixedEffectsNames)])), paste(output,"_predictFull.txt",sep=""),append=T,ncolumns=(1+length(fixedEffectsNames)))				
+            write(t(as.matrix(predict[,c(outcome,fixedEffectsNames)])), paste(output,"_predictFull.txt",sep=""),append=T,ncolumns=(1+length(fixedEffectsNames)))
           }
           fullPredictFile<-TRUE
         } else {
@@ -267,7 +269,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
           fullPredictFile<-TRUE
         }
       } else {
-        
+
         write(nPreds, paste(output,"_predictFull.txt",sep=""),ncolumns=1)
         if (yModel=="Poisson" || yModel=="Binomial" ||yModel == "Survival"){
           predictFixedEffectsNA<-as.matrix(predict[,c(outcome,outcomeT)])
@@ -278,7 +280,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
         }
         fullPredictFile<-TRUE
       }
-      
+
     } else {
       fullPredictFile<-FALSE
     }
@@ -300,34 +302,53 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   }
   timeindices <- matrix(c(tStart,tStop),ncol=2,byrow=F)
   ##//RJ write indices then data to file
-  write(t(timeindices),fileName,append=T,ncolumns=2)	
+  write(t(timeindices),fileName,append=T,ncolumns=2)
   if(length(longData)>0){
     meanLongData <- mean(longData$outcome)
     longData$outcome <- longData$outcome - meanLongData
     write(t(cbind(longData$time,longData$outcome)),fileName,append=T,ncolumns=(dim(longData)[2]-1))
   }
-  
+  all_times<-c()
+  if(!is.null(longData)){
+    ##//AR correspondance times to sample GPmean
+    write(length(unique(longData$time)),fileName,append=T,ncolumns=1)
+
+    all_times <- unique(longData$time)
+    all_times <- all_times[order(all_times)]
+    times_corr <- vector(length=length(longData$time))
+
+    count=0
+    for(i in 1:nSubjects){
+      for(j in 1:(timeindices[i,2]-timeindices[i,1]+1)){
+        times_corr[count + j] <- min(which(all_times == longData$time[count + j]))-1
+      }
+      count <- count + j
+    }
+    write(t(all_times),fileName,append=T,ncolumns=1)
+    write(t(times_corr),fileName,append=T,ncolumns=1)
+  }
+
   # other checks to ensure that there are no errors when calling the program
   if (xModel!="Discrete"&xModel!="Normal"&xModel!="Mixed") stop("This xModel is not defined.")
   if (yModel!="Poisson"&yModel!="Longitudinal"&yModel!="MVN"&yModel!="Binomial"&yModel!="Bernoulli"&yModel!="Normal"&yModel!="Categorical"&yModel!="Survival") stop("This yModel is not defined.")
-  
-  # conditions for alpha and dPitmanYor parameters	
+
+  # conditions for alpha and dPitmanYor parameters
   # checks that dPitmanYor is in the correct interval
   if (dPitmanYor<0&dPitmanYor>=1) stop("dPitmanYor must belongto the interval [0,1).")
   # if alpha < 0 then we have a Dirichlet prior, so cannot use dPitmanYor
   # if the user asks for alpha<0 and dPitmanYor>0 we stop and give an error message to ensure the user is aware
   if (alpha<=-1&&dPitmanYor>0) stop("Setting alpha < 0 (the default is -2) and dPitmanYor > 0 is not allowed.")
-  # the third label switching move is only for Dirichlet process prior, not for Pitman-Yor process prior 
+  # the third label switching move is only for Dirichlet process prior, not for Pitman-Yor process prior
   if (dPitmanYor>0) whichLabelSwitch<-"12"
   if ((alpha>=-1)&(alpha < -dPitmanYor)) stop("It is a condition of the Pitman-Yor process prior that alpha > - dPitmanYor.")
   if (dPitmanYor>0&sampler!="Truncated") stop("The Pitman-Yor process prior has been implemented to use with the Truncated sampler only.")
   #if (dPitmanYor>0&sampler=="Truncated") print("Note that for the Pitman-Yor process prior there might be en error when using the Truncated sampler. This is due to the way that the bound on the number of clusters is computed.")
-  
+
   #check entries for spatial CAR term
-  if (includeCAR&file.exists(neighboursFile)==FALSE) stop("You must enter a valid file for neighbourhood structure.") 
-  
-  inputString<-paste("PReMiuM --input=",fileName," --output=",output," --xModel=",xModel," --yModel=",yModel," --varSelect=",varSelectType," --whichLabelSwitch=",whichLabelSwitch," --predType=",predictType,sep="")
-  
+  if (includeCAR&file.exists(neighboursFile)==FALSE) stop("You must enter a valid file for neighbourhood structure.")
+
+  inputString<-paste("PReMiuMar --input=",fileName," --output=",output," --xModel=",xModel," --yModel=",yModel," --varSelect=",varSelectType," --whichLabelSwitch=",whichLabelSwitch," --predType=",predictType,sep="")
+
   # create hyperparameters file
   if (!missing(hyper)) {
     hyperFile <-paste(output,"_hyper.txt",sep="")
@@ -386,6 +407,13 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     }
     if (!is.null(hyper$sigmaLNoise)){
       write(paste("sigmaL_noise=",hyper$sigmaLNoise,sep=""),hyperFile,append=T)
+    }
+    # //AR
+    if (!is.null(hyper$muLTime)){
+      write(paste("muL_time=",hyper$muLTime,sep=""),hyperFile,append=T)
+    }
+    if (!is.null(hyper$sigmaLTime)){
+      write(paste("sigmaL_time=",hyper$sigmaLTime,sep=""),hyperFile,append=T)
     }
     if (!is.null(hyper$MVNmu0)){
       write(paste("MVNmu0=",paste(hyper$MVNmu0,collapse=" ")," ",sep=""),hyperFile,append=T)
@@ -452,11 +480,11 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
       write(paste("initAlloc=",paste(hyper$initAlloc,collapse=" ")," ",sep=""),hyperFile,append=T)
       if(sum(is.wholenumber(hyper$initAlloc))!=nSubjects) stop("The vector initAlloc has not been initialised properly: the vector must contain integers and have as many elements as there are observations in the dataset (nSubjects).")
       nClusInit<-max(hyper$initAlloc)
-      
-      
+
+
     }
   }
-  
+
   if (weibullFixedShape) inputString<-paste(inputString," --weibullFixedShape",sep="")
   if (reportBurnIn) inputString<-paste(inputString," --reportBurnIn",sep="")
   if (!missing(alpha)) inputString<-paste(inputString," --alpha=",alpha,sep="")
@@ -475,10 +503,12 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   if (!missing(entropy)) inputString<-paste(inputString," --entropy",sep="")
   if (includeCAR) inputString<-paste(inputString," --includeCAR", " --neighbours=", neighboursFile ,sep="")
   if (useNormInvWishPrior) inputString<-paste(inputString," --useNormInvWishPrior", sep="")
-  
-  if (run) .Call('profRegr', inputString, PACKAGE = 'PReMiuM')
-  
-  
+  if (!missing(kernel)) inputString<-paste(inputString," --kernel=",  kernel ,sep="")
+  if (sampleGPmean) inputString<-paste(inputString," --sampleGPmean=" ,sampleGPmean,sep="")
+  if (ratio_v != 0) inputString<-paste(inputString," --ratio_v=" ,ratio_v,sep="")
+
+  if (run) .Call('profRegr', inputString, PACKAGE = 'PReMiuMar')
+
   # define directory path and fileStem
   outputSplit <- strsplit(output,split="/")
   fileStem <- tail(outputSplit[[1]],1)
@@ -487,7 +517,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   } else {
     directoryPath <-"."
   }
-  
+
   # other re-writes for function return
   # var select and var select type
   if (varSelectType=="None") {
@@ -533,7 +563,7 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
   } else {
     includeResponse <- TRUE
   }
-  
+
   if (xModel=="Mixed") {
     discreteTmp<-discreteCovs
     contTmp<-continuousCovs
@@ -541,14 +571,14 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
     discreteTmp<-NA
     contTmp<-NA
   }
-  
+
   if (xModel=="Discrete"){
     useNIWP<-NA
   }else{
     useNIWP<-useNormInvWishPrior
   }
-  
-  
+
+
   return(list("directoryPath"=directoryPath,
               "fileStem"=fileStem,
               "inputFileName"=fileName,
@@ -569,7 +599,6 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
               "xModel"=xModel,
               "includeResponse"=includeResponse,
               "outcome"=outcome,
-              "nOutcomes"=nOutcomes,
               "whichLabelSwitch"=whichLabelSwitch,
               "yModel"=yModel,
               "varSelect"=varSelect,
@@ -585,15 +614,16 @@ profRegr<-function(covNames, fixedEffectsNames, outcome="outcome", outcomeT=NA, 
               "weibullFixedShape"=weibullFixedShape,
               "useNormInvWishPrior"=useNIWP,
               "xMat"=xMat,"yMat"=yMat,"wMat"=wMat,
-              "longMat"=longMat,"longMean"=longMean,"tMat"=tMat))
+              "longMat"=longMat,"longMean"=longMean,"tMat"=tMat,
+              "kernel"=kernel, "sampleGPmean"= sampleGPmean, "ratio_v"= ratio_v, "nTimes_unique"=length(all_times)))
 }
 
 
 
 # Function to take the output from the C++ run and return an average dissimilarity
 # matrix
-calcDissimilarityMatrix<-function(runInfoObj,onlyLS=FALSE){
-  
+dissimObj <-calcDissimilarityMatrix<-function(runInfoObj,onlyLS=FALSE){
+
   directoryPath=NULL
   fileStem=NULL
   reportBurnIn=NULL
@@ -602,45 +632,45 @@ calcDissimilarityMatrix<-function(runInfoObj,onlyLS=FALSE){
   nSubjects=NULL
   nPredictSubjects=NULL
   nBurn=NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
-  
+
   fileName <- file.path(directoryPath,paste(fileStem,'_z.txt',sep=''))
-  
+
   if (reportBurnIn) {
     recordedNBurn<-nBurn
   } else {
     recordedNBurn<-1
   }
-  
+
   # Call the C++ to compute the dissimilarity matrix
   disSimList<-.Call('calcDisSimMat',fileName,nSweeps,recordedNBurn,nFilter,nSubjects,
-                    nPredictSubjects, onlyLS, PACKAGE = 'PReMiuM')
-  
+                    nPredictSubjects, onlyLS, PACKAGE = 'PReMiuMar')
+
   if (onlyLS){
     lsOptSweep<-disSimList$lsOptSweep
-    disSimMatPred<-NULL              
+    disSimMatPred<-NULL
     disSimObj<-list('disSimRunInfoObj'=runInfoObj,'disSimMat'=NA,
-                    'disSimMatPred'=NA,'lsOptSweep'=lsOptSweep,'onlyLS'=onlyLS)              
+                    'disSimMatPred'=NA,'lsOptSweep'=lsOptSweep,'onlyLS'=onlyLS)
   } else {
     disSimMat<-disSimList$disSimMat
     lsOptSweep<-disSimList$lsOptSweep
-    disSimMatPred<-NULL              
+    disSimMatPred<-NULL
     if(nPredictSubjects>0){
       disSimMatPred<-disSimMat[(1+(nSubjects*(nSubjects-1)/2)):length(disSimMat)]
       disSimMat<-disSimMat[1:(nSubjects*(nSubjects-1)/2)]
-    }   
+    }
     disSimObj<-list('disSimRunInfoObj'=runInfoObj,'disSimMat'=disSimMat,
-                    'disSimMatPred'=disSimMatPred,'lsOptSweep'=lsOptSweep,'onlyLS'=onlyLS)              
+                    'disSimMatPred'=disSimMatPred,'lsOptSweep'=lsOptSweep,'onlyLS'=onlyLS)
   }
-  
+
   return(disSimObj)
 }
 
 # Given a dissimilarity matrix (or list of dissimilarity matrices)
 # run partitioning around medoids clustering
 calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
-  
+
   disSimRunInfoObj=NULL
   directoryPath=NULL
   fileStem=NULL
@@ -652,17 +682,17 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
   nFilter=NULL
   nSweeps=NULL
   onlyLS=NULL
-  
+
   for (i in 1:length(disSimObj)) assign(names(disSimObj)[i],disSimObj[[i]])
   for (i in 1:length(disSimRunInfoObj)) assign(names(disSimRunInfoObj)[i],disSimRunInfoObj[[i]])
-  
+
   if (onlyLS==TRUE) useLS <- TRUE
-  
+
   if(useLS){
     # maniupulation for least squares method, but computation has been done in previous function
     zFileName <- file.path(directoryPath,paste(fileStem,'_z.txt',sep=''))
     zFile<-file(zFileName,open="r")
-    
+
     optZ<-scan(zFile,what=integer(),skip=lsOptSweep-1,n=nSubjects+nPredictSubjects,quiet=T)
     optZFit<-optZ[1:nSubjects]
     if(nPredictSubjects>0){
@@ -675,37 +705,37 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
     for(c in 1:chosenNClusters){
       clustSizes[c]<-length(which(clustVec==c))
     }
-    
+
     clusteringPred<-NULL
     if(nPredictSubjects>0){
       clusteringPred<-match(optZPredict,uZFit)
     }
     avgSilhouetteWidth<-NULL
     close(zFile)
-    
+
   }else{
-    
+
     if(is.null(maxNClusters)){
       # Determine the maximum number of clusters
       nMembersFileName<-file.path(directoryPath,paste(fileStem,'_nMembers.txt',sep=''))
       nMembersFile<-file(nMembersFileName,open="r")
       nClustersFileName<- file.path(directoryPath,paste(fileStem,'_nClusters.txt',sep=''))
       nClustersFile<-file(nClustersFileName,open="r")
-      
+
       # Restrict to sweeps after burn in
       firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
       lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
       maxNClusters<-0
-      
+
       for(sweep in firstLine:lastLine){
         if(sweep==firstLine){
           skipVal<-firstLine-1
         }else{
           skipVal<-0
         }
-        
+
         # Get the current number of members for each cluster
-        nClusters<-scan(nClustersFile,what=integer(),skip=skipVal,n=1,quiet=T)	
+        nClusters<-scan(nClustersFile,what=integer(),skip=skipVal,n=1,quiet=T)
         currNMembers<-scan(nMembersFile,what=integer(),skip=skipVal,n=nClusters+1,quiet=T)
         currNMembers<-currNMembers[1:nClusters]
         # Find the number of non-empty clusters
@@ -713,19 +743,19 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
         if(nNotEmpty>maxNClusters){
           maxNClusters<-nNotEmpty
         }
-      }   
+      }
       # Add on another 5 just to make sure bound is safe (but don't let it exceed no. of subjects -1)
       maxNClusters<-min(maxNClusters+5,nSubjects-1)
-      
+
       close(nMembersFile)
       close(nClustersFile)
-    }   
-    
+    }
+
     # If the input was a list of dissimilarity matrices then take the average
     if(is.list(disSimMat)){
       for(i in 1:length(disSimMat)){
         if(i==1){
-          tmpMat<-disSimMat[[i]]      
+          tmpMat<-disSimMat[[i]]
         }else{
           tmpMat<-tmpMat+disSimMat[[i]]
         }
@@ -733,7 +763,7 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
       tmpMat<-tmpMat/length(disSimMat)
       disSimMat<-tmpMat
     }
-    
+
     # Loop over the possible number of clusters
     avgSilhouetteWidth<--1.0;
     cat(paste("Max no of possible clusters:",maxNClusters,"\n"))
@@ -750,7 +780,7 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
         clustMedoids<-tmpObj$id.med
       }
     }
-    
+
     # Work out the clustering of the prediction objects
     clusteringPred<-NULL
     if(nPredictSubjects>0){
@@ -767,7 +797,7 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
       }
     }
   }
-  
+
   return(list("clusObjRunInfoObj"=disSimObj$disSimRunInfoObj,
               "clusObjDisSimMat"=disSimObj$disSimMat,
               "nClusters"=chosenNClusters,
@@ -780,7 +810,7 @@ calcOptimalClustering<-function(disSimObj,maxNClusters=NULL,useLS=F){
 # Function to take the optimal clustering and computing the risk and probability
 # profile
 calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazards=F){
-  
+
   clusObjRunInfoObj=NULL
   directoryPath=NULL
   fileStem=NULL
@@ -806,18 +836,18 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
   wMat=NULL
   yMat=NULL
   weibullFixedShape=NULL
-  
+
   for (i in 1:length(clusObj)) assign(names(clusObj)[i],clusObj[[i]])
   for (i in 1:length(clusObjRunInfoObj)) assign(names(clusObjRunInfoObj)[i],clusObjRunInfoObj[[i]])
-  
+
   # Construct the number of clusters file name
   nClustersFileName<-file.path(directoryPath,paste(fileStem,'_nClusters.txt',sep=''))
   nClustersFile<-file(nClustersFileName,open="r")
-  
+
   # Construct the allocation file name
   zFileName <- file.path(directoryPath,paste(fileStem,'_z.txt',sep=''))
   zFile<-file(zFileName,open="r")
-  
+
   if(xModel=="Discrete"){
     # Construct the allocation file name
     phiFileName <- file.path(directoryPath,paste(fileStem,'_phi.txt',sep=''))
@@ -871,7 +901,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
       }
     }
   }
-  
+
   if(includeResponse){
     # Construct the theta file name
     thetaFileName <- file.path(directoryPath,paste(fileStem,'_theta.txt',sep=''))
@@ -899,19 +929,19 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
       nu<-(read.table(nuFile)[,1])
       close(nuFile)
     }
-  } 
-  
+  }
+
   # Restrict to sweeps after burn in
   firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
   lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
   nSamples<-lastLine-firstLine+1
-  
+
   # Make a list of the subjects in each of the optimal clusters
   optAlloc<-vector("list",nClusters)
   for(c in 1:nClusters){
     optAlloc[[c]]<-which(clustering==c)
   }
-  
+
   if(includeResponse){
     # Initialise the object for storing the risks
     riskArray<-array(0,dim=c(nSamples,nClusters,nCategoriesY))
@@ -919,8 +949,8 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
     if (yModel=="Survival"&&!weibullFixedShape){
       nuArray<-array(0,dim=c(nSamples,nClusters))
     } else if(yModel=="Longitudinal"){
-      LArray<-array(0,dim=c(nSamples,nClusters,3))
-      riskArray<-array(0,dim=c(nSamples,nClusters,3))
+      LArray<-array(0,dim=c(nSamples,nClusters,ifelse(kernel=="SQexponential",3,4)))
+      riskArray<-array(0,dim=c(nSamples,nClusters,ifelse(kernel=="SQexponential",3,4)))
     } else if(yModel=="MVN"){
       MVNmuArray<-array(0,dim=c(nSamples,nClusters,nOutcomes))
       MVNSigmaArray<-array(0,dim=c(nSamples,nClusters,nOutcomes*(nOutcomes+1)/2))
@@ -932,7 +962,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
   }else{
     riskArray<-NULL
   }
-  
+
   # Initialise the object for storing the profiles
   if(xModel=='Discrete'){
     phiArray<-array(dim=c(nSamples,nClusters,nCovariates,maxNCategories))
@@ -978,24 +1008,24 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
     }
     sigmaArray<-array(dim=c(nSamples,nClusters,nContinuousCovs,nContinuousCovs))
   }
-  
-  
+
+
   for(sweep in firstLine:lastLine){
     if(sweep==firstLine){
       skipVal<-firstLine-1
     }else{
       skipVal<-0
     }
-    
+
     if(sweep-firstLine==0||(sweep-firstLine+1)%%1000==0){
       cat(paste("Processing sweep",sweep-firstLine+1,"of ",lastLine-firstLine+1,"\n"))
     }
     currMaxNClusters<-scan(nClustersFile,what=integer(),skip=skipVal,n=1,quiet=T)
-    
+
     # Get the current allocation data for this sweep
     currZ<-scan(zFile,what=integer(),skip=skipVal,n=nSubjects+nPredictSubjects,quiet=T)
     currZ<-1+currZ
-    
+
     if(includeResponse){
       # Get the risk data corresponding to this sweep
       if (yModel=="Categorical") {
@@ -1009,8 +1039,8 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
           currNuVector<-scan(nuFile,what=double(),skip=skipVal,n=currMaxNClusters,quiet=T)
           currNu<-c(currNuVector)
         } else if (yModel=="Longitudinal"){
-          currLVector<-scan(LFile,what=double(),skip=skipVal,n=3*currMaxNClusters,quiet=T)
-          currL<-matrix(currLVector,nrow=currMaxNClusters,ncol=3,byrow=T)
+          currLVector<-scan(LFile,what=double(),skip=skipVal,n=ifelse(kernel=="SQexponential",3,4)*currMaxNClusters,quiet=T)
+          currL<-matrix(currLVector,nrow=currMaxNClusters,ncol=ifelse(kernel=="SQexponential",3,4),byrow=T)
         } else if (yModel=="MVN"){
           currMVNmuVector<-scan(MVNmuFile,what=double(),skip=skipVal,n=nOutcomes*currMaxNClusters,quiet=T)
           currMVNmu<-matrix(currMVNmuVector,nrow=currMaxNClusters,ncol=nOutcomes,byrow=T)
@@ -1030,7 +1060,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
         betaArray[sweep-firstLine+1,,]<-currBeta
       }
       # Calculate the average risk (over subjects) for each cluster
-      
+
       for(c in 1:nClusters){
       	currLambdaVector<-currTheta[currZ[optAlloc[[c]]],]
         currLambda<-matrix(currLambdaVector,ncol=nCategoriesY)
@@ -1040,7 +1070,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
               for (k in 1:nCategoriesY) currLambda[i,k]<-currLambda[i,k]+
                 t(as.matrix(wMat[optAlloc[[c]][i],]))%*%
                 currBeta[,yMat[optAlloc[[c]][i]]+1]
-            }	
+            }
           } else {
             currLambda<-currLambda+as.matrix(wMat[optAlloc[[c]],])%*%currBeta
           }
@@ -1066,7 +1096,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
             currRisk<-1/((exp(currLambda))^(1/currNuVector))*gamma(1+1/currNuVector)
           }
         }else if(yModel=="Longitudinal"){##//RJ current L
-          LArray[sweep-firstLine+1,c,]<-apply(matrix(currL[currZ[optAlloc[[c]]],],ncol=3),2,mean)
+          LArray[sweep-firstLine+1,c,]<-apply(matrix(currL[currZ[optAlloc[[c]]],],ncol=ifelse(kernel=="SQexponential",3,4)),2,mean)
           IDs <- unique(longMat$ID)
           currIDs <- IDs[optAlloc[[c]]]
           currRisk<-matrix(longMat$outcome[longMat$ID%in%currIDs] + longMean)
@@ -1106,13 +1136,13 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
         for(p in 1:maxNCategories){
           currGamma[,p,]<-tmpCurrGamma
         }
-      }	
-      
+      }
+
       for(c in 1:nClusters){
         phiArray[sweep-firstLine+1,c,,]<-t(apply(array(currPhi[currZ[optAlloc[[c]]],,],
                                                        dim=c(length(optAlloc[[c]]),
                                                              dim(currPhi)[2],dim(currPhi)[3])),2:3,mean))
-        
+
         if(varSelect){
           phiStarArray[sweep-firstLine+1,c,,]<-t(apply(array(currGamma[currZ[optAlloc[[c]]],,],
                                                              dim=c(length(optAlloc[[c]]),dim(currGamma)[2],
@@ -1123,7 +1153,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
                                                          array(currNullPhi[rep(1,length(optAlloc[[c]])),,],
                                                                dim=c(length(optAlloc[[c]]),dim(currNullPhi)[2],
                                                                      dim(currNullPhi)[3])),2:3,mean))
-          
+
         }
       }
     }else if(xModel=='Normal'){
@@ -1143,7 +1173,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
           tmpCurrGamma<-array(tmpCurrGamma,dim=c(nCovariates,currMaxNClusters))
           currGamma<-t(tmpCurrGamma)
         }
-        
+
       }
       for(c in 1:nClusters){
         muArray[sweep-firstLine+1,c,]<-apply(matrix(currMu[currZ[optAlloc[[c]]],],ncol=nCovariates),2,mean)
@@ -1154,7 +1184,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
                                                      matrix(currNullMu[rep(1,length(optAlloc[[c]])),],ncol=nCovariates),2,mean)
         }
       }
-      
+
       currSigma<-scan(SigmaFile,what=double(),skip=skipVal,n=currMaxNClusters*nCovariates*nCovariates,quiet=T)
       currSigma<-array(currSigma,dim=c(currMaxNClusters,nCovariates,nCovariates))
       for(c in 1:nClusters){
@@ -1187,7 +1217,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
         for(p in 1:maxNCategories){
           currGamma[,p,]<-tmpCurrGamma
         }
-      }	
+      }
       for(c in 1:nClusters){
         phiArray[sweep-firstLine+1,c,,]<-t(apply(array(currPhi[currZ[optAlloc[[c]]],,],
                                                        dim=c(length(optAlloc[[c]]),
@@ -1214,7 +1244,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
                                                      matrix(currNullMu[rep(1,length(optAlloc[[c]])),],ncol=nContinuousCovs),2,mean)
         }
       }
-      
+
       currSigma<-scan(SigmaFile,what=double(),skip=skipVal,n=currMaxNClusters*nContinuousCovs*nContinuousCovs,quiet=T)
       currSigma<-array(currSigma,dim=c(currMaxNClusters,nContinuousCovs,nContinuousCovs))
       for(c in 1:nClusters){
@@ -1234,13 +1264,13 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
       }else if(yModel=='Poisson'){
         empiricals[c]<-mean(yMat[optAlloc[[c]],1]/yMat[optAlloc[[c]],2])
         #}else if(yModel=='Categorical'){
-        # no empiricals for categorical outcome				
+        # no empiricals for categorical outcome
       }else if(yModel=="Longitudinal"||yModel=="MVN"){##//RJ same as empirical
         empiricals[c] <- mean(riskArray[,c,1])
-      } 
+      }
     }
   }
-  
+
   if(xModel=='Discrete'){
     out<-list('riskProfClusObj'=clusObj,'risk'=riskArray,'profile'=phiArray,'profileStar'=phiStarArray,'empiricals'=empiricals)
   }else if(xModel=='Normal'){
@@ -1253,7 +1283,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
               'profileMu'=muArray,'profileStarMu'=muStarArray,
               'profileStdDev'=sigmaArray,'empiricals'=empiricals)
   }
-  
+
   close(zFile)
   close(nClustersFile)
   if(xModel=="Discrete"){
@@ -1275,8 +1305,8 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
       close(gammaFile)
     }
   }
-  
-  
+
+
   if(includeResponse){
     close(thetaFile)
     if(nFixedEffects>0){
@@ -1297,7 +1327,7 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
       close(MVNSigmaFile)
     }
   }
-  
+
   return(out)
 }
 
@@ -1305,8 +1335,8 @@ calcAvgRiskAndProfile<-function(clusObj,includeFixedEffects=F,proportionalHazard
 
 # Plot output values
 plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,whichClusters=NULL,whichCovariates=NULL,
-                          useProfileStar=F,riskLim=NULL){
-  
+                          useProfileStar=F,riskLim=NULL,extrapolation=TRUE){
+
   riskProfClusObj=NULL
   clusObjRunInfoObj=NULL
   includeResponse=NULL
@@ -1337,14 +1367,15 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
   nu=NULL
   meanNu=NULL
   lowerNu=NULL
-  upperNu=NULL	
-  
+  upperNu=NULL
+  kernel=NULL
+
   for (i in 1:length(riskProfObj)) assign(names(riskProfObj)[i],riskProfObj[[i]])
   for (i in 1:length(riskProfClusObj)) assign(names(riskProfClusObj)[i],riskProfClusObj[[i]])
   for (i in 1:length(clusObjRunInfoObj)) assign(names(clusObjRunInfoObj)[i],clusObjRunInfoObj[[i]])
-  
+
   if (nClusters==1) stop("Cannot produce plots because only one cluster has been found.")
-  
+
   plotRiskFlag <- 2
   if(includeResponse){
     if(yModel=="Normal"){
@@ -1390,13 +1421,13 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       profileStdDev<-profileStdDev[,,whichContinuousCovs-nDiscreteCovsAll,whichContinuousCovs-nDiscreteCovsAll]
       covNames<-c(discreteCovs,continuousCovs)
       nCovariates<-length(covNames)
-      
+
     }
   }
-  
+
   png(outFile,width=1200,height=800)
   orderProvided<-F
-  
+
   if(!is.null(orderBy)){
     if(!includeResponse){
       if(orderBy!='Empirical'&&orderBy!='ClusterSize'&&!orderBy%in%covNames){
@@ -1405,7 +1436,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
             orderProvided<-T
             meanSortIndex<-orderBy
           }else{
-            cat("Order vector provided not of same length as number of clusters. Reverting to default ordering.\n")	
+            cat("Order vector provided not of same length as number of clusters. Reverting to default ordering.\n")
             orderBy<-NULL
           }
           orderBy<-NULL
@@ -1419,7 +1450,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
             orderProvided<-T
             meanSortIndex<-orderBy
           }else{
-            cat("Order vector provided not of same length as number of clusters. Reverting to default ordering.\n")	
+            cat("Order vector provided not of same length as number of clusters. Reverting to default ordering.\n")
             orderBy<-NULL
           }
           orderBy<-NULL
@@ -1427,13 +1458,13 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         #orderBy<-NULL
       }
     }
-    
+
   }
-  
+
   # Set up the layout for the plot
   ##//RJ remove 'Risk' from Longitudinal summary
   plotLayout<-grid.layout(ncol = nCovariates+plotRiskFlag, nrow = 6)
-  
+
   grid.newpage()
   pushViewport(viewport(layout = plotLayout))
   if(!orderProvided){
@@ -1491,10 +1522,11 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
             orderStat<-apply(tmpMat,2,median)
           }
         }
-      }	
+      }
     }
     # Sort into ascending mean size
-    meanSortIndex<-order(orderStat,decreasing=F)
+    #meanSortIndex<-order(orderStat,decreasing=F) //AR
+    meanSortIndex<-1:nClusters
   }
   if(includeResponse){
     # Reorder the risk matrix
@@ -1505,12 +1537,12 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         risk[,c,]<-risk[,c,]/risk[,1,]
       }
     }
-    # reorder the nu matrix 
+    # reorder the nu matrix
     if (yModel=="Survival"&&!weibullFixedShape){
       nuDim<-dim(nuArray)
       nuArray<-array(nuArray[,meanSortIndex],dim=nuDim)
     }
-    ##//RJ reorder the L matrix 
+    ##//RJ reorder the L matrix
     if (yModel=="Longitudinal"){
       LDim<-dim(LArray)
       LArray<-array(LArray[,meanSortIndex,],dim=LDim)
@@ -1522,7 +1554,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       MVNSigmaArray<-array(MVNSigmaArray[,meanSortIndex,],dim=MVNSigmaDim)
     }
   }
-  
+
   # Reorder the cluster sizes
   clusterSizes<-clusterSizes[meanSortIndex]
   # Reorder the empiricals
@@ -1536,11 +1568,11 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
     riskUpper<-apply(risk,2,quantile,0.95)
     # The next line is to avoid outliers spoiling plot scales
     plotMax<-max(riskUpper)
-    
+
     # Get the plot colors
     riskColor<-ifelse(riskLower>rep(riskMean,nClusters),"high",
                       ifelse(riskUpper<rep(riskMean,nClusters),"low","avg"))
-    if (yModel=="Categorical"){		
+    if (yModel=="Categorical"){
       riskDF<-data.frame("risk"=c(),"category"=c(),"cluster"=c(),"meanRisk"=c(),
                          "lowerRisk"=c(),"upperRisk"=c(),"fillColor"=c())
     } else {
@@ -1553,15 +1585,15 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       nuMean<-sum(nuMeans*clusterSizes)/sum(clusterSizes)
       nuLower<-apply(nuArray,2,quantile,0.05)
       nuUpper<-apply(nuArray,2,quantile,0.95)
-      
+
       nuDF<-data.frame("nu"=c(),"cluster"=c(),"meanNu"=c(),
                        "lowerNu"=c(),"upperNu"=c(),"fillColor"=c())
     }
     if (yModel=="Longitudinal"){
       # Recompute the means and now also credible intervals
-      LMeans <- matrix(0,ncol=3,nrow=dim(LArray)[2])
+      LMeans <- matrix(0,ncol=ifelse(kernel=="SQexponential",3,4),nrow=dim(LArray)[2])
       LMean <- c()
-      for(i in 1:3){
+      for(i in 1:ifelse(kernel=="SQexponential",3,4)){
         LMeans[,i]<-apply(LArray[,,i],2,mean,trim=0.005)
         LMean[i]<-sum(LMeans*clusterSizes)/sum(clusterSizes)
       }
@@ -1575,17 +1607,17 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       MVNmuDF<-data.frame("MVNmu"=c(),"cluster"=c(),"meanMVNmu"=c(),
                        "lowerMVNmu"=c(),"upperMVNmu"=c(),"fillColor"=c())
     }
-    
+
   }else{
     riskColor<-ifelse(empiricals>rep(meanEmpirical,length(empiricals)),"high",
                       ifelse(empiricals<rep(meanEmpirical,nClusters),"low","avg"))
   }
-  
+
   if(is.null(whichClusters)){
     whichClusters<-1:nClusters
   }
   nClusters<-length(whichClusters)
-  
+
   empiricalDF<-data.frame("empiricals"=c(),"meanEmpirical"=c(),"cluster"=c(),"fillColor"=c())
   sizeDF<-data.frame("clusterSize"=c(),"cluster"=c(),"fillColor"=c())
   # Restructure the data for plotting
@@ -1594,7 +1626,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       if (yModel=="Categorical"){
         plotRisk<-risk[,c,]
         nPoints<-dim(plotRisk)[1]
-        for (k in 1:nCategoriesY){				
+        for (k in 1:nCategoriesY){
           riskDF<-rbind(riskDF,data.frame("risk"=plotRisk[,k],
                                           "category"=rep(k,nPoints),
                                           "cluster"=rep(c,nPoints),
@@ -1648,11 +1680,11 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         probMean<-sum(probMeans*clusterSizes)/sum(clusterSizes)
         probLower<-apply(probMat,2,quantile,0.05)
         probUpper<-apply(probMat,2,quantile,0.95)
-        
+
         # Get the plot colors
         probColor<-ifelse(probLower>rep(probMean,length(probLower)),"high",
                           ifelse(probUpper<rep(probMean,length(probUpper)),"low","avg"))
-        
+
         for(c in whichClusters){
           riskDF<-rbind(riskDF,data.frame("prob"=probMat[,c],"cluster"=rep(c,nPoints),
                                           "category"=rep(k-1,nPoints),
@@ -1661,10 +1693,10 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                           "upperProb"=rep(probUpper[c],nPoints),
                                           "fillColor"=rep(probColor[c],nPoints)))
           rownames(riskDF)<-seq(1,nrow(riskDF),1)
-          
+
         }
       }
-      
+
       plotObj<-ggplot(riskDF)
       plotObj<-plotObj+facet_wrap(~category,ncol=1,as.table=F,scales="free_y")
       plotObj<-plotObj+geom_hline(aes(x=as.factor(cluster),y=prob,yintercept=meanProb))
@@ -1719,7 +1751,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       #			print(plotObj,vp=viewport(layout.pos.row=4:6,layout.pos.col=2))
     } else if (yModel!='Longitudinal'||yModel=="MVN"){ ##//RJ
       rownames(riskDF)<-seq(1,nrow(riskDF),by=1)
-      
+
       # Create the risk plot
       plotObj<-ggplot(riskDF)
       plotObj<-plotObj+geom_hline(aes(x=as.factor(cluster),y=risk,yintercept=meanRisk))
@@ -1737,9 +1769,9 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       # Margin order is (top,right,bottom,left)
       plotObj<-plotObj+theme(plot.margin=unit(c(0,0,0,0),'lines'))+theme(plot.margin=unit(c(0.5,0.15,0.5,0.15),'lines'))
       print(plotObj,vp=viewport(layout.pos.row=1:6,layout.pos.col=2))
-    }	
+    }
   }
-  
+
   # Create a bar chart of cluster empiricals
   if((!is.null(yModel))){
     if(yModel!="Categorical"){
@@ -1784,8 +1816,8 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         # Get the plot colors
         probColor<-ifelse(probLower>rep(probMean,length(probLower)),"high",
                           ifelse(probUpper<rep(probMean,length(probUpper)),"low","avg"))
-        
-        
+
+
         for(c in whichClusters){
           profileDF<-rbind(profileDF,data.frame("prob"=probMat[,c],"cluster"=rep(c,nPoints),
                                                 "category"=rep(k-1,nPoints),
@@ -1794,7 +1826,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                                 "upperProb"=rep(probUpper[c],nPoints),
                                                 "fillColor"=rep(probColor[c],nPoints)))
           rownames(profileDF)<-seq(1,nrow(profileDF),1)
-          
+
         }
       }
       plotObj<-ggplot(profileDF)
@@ -1816,7 +1848,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       plotObj<-plotObj+theme(plot.margin=unit(c(0.5,ifelse(j==nCovariates,1,0),0.5,ifelse(j==1,0.5,0)),'lines'))+
         theme(plot.margin=unit(c(0,0,0,0),'lines'))
       print(plotObj,vp=viewport(layout.pos.row=1:6,layout.pos.col=j+plotRiskFlag))
-      
+
     }else if(xModel=='Normal'){
       # Plot the means
       profileDF<-data.frame("mu"=c(),"cluster"=c(),"muMean"=c(),
@@ -1829,7 +1861,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       # The next line is to avoid outliers spoiling plot scales
       plotMax<-max(muUpper)
       plotMin<-min(muLower)
-      
+
       # Get the plot colors
       muColor<-ifelse(muLower>rep(muMean,length(muLower)),"high",
                       ifelse(muUpper<rep(muMean,length(muUpper)),"low","avg"))
@@ -1843,9 +1875,9 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                               "upperMu"=rep(muUpper[c],nPoints),
                                               "fillColor"=rep(muColor[c],nPoints)))
       }
-      
+
       rownames(profileDF)<-seq(1,nrow(profileDF),1)
-      
+
       plotObj<-ggplot(profileDF)
       plotObj<-plotObj+geom_hline(aes(x=as.factor(cluster),y=mu,yintercept=meanMu))
       plotObj<-plotObj+geom_boxplot(aes(x=as.factor(cluster),y=mu,fill=as.factor(fillColor)),outlier.size=0.5)
@@ -1864,7 +1896,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       plotObj<-plotObj+
         theme(plot.margin=unit(c(0.5,ifelse(j==nCovariates,1,0),0.5,ifelse(j==1,0.5,0)),'lines'))+
         theme(plot.margin=unit(c(0,0,0,0),'lines'))
-      
+
       print(plotObj,vp=viewport(layout.pos.row=1:3,layout.pos.col=j+plotRiskFlag))
       # Plot the variances
       profileDF<-data.frame("sigma"=c(),"cluster"=c(),"sigmaMean"=c(),
@@ -1876,7 +1908,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       sigmaUpper<-apply(sigmaMat,2,quantile,0.95)
       # The next line is to avoid outliers spoiling plot scales
       plotMax<-max(sigmaUpper)
-      
+
       # Get the plot colors
       sigmaColor<-ifelse(sigmaLower>rep(sigmaMean,length(sigmaLower)),"high",
                          ifelse(sigmaUpper<rep(sigmaMean,length(sigmaUpper)),"low","avg"))
@@ -1891,7 +1923,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                               "fillColor"=rep(sigmaColor[c],nPoints)))
       }
       rownames(profileDF)<-seq(1,nrow(profileDF),1)
-      
+
       plotObj<-ggplot(profileDF)
       plotObj<-plotObj+geom_hline(aes(x=as.factor(cluster),y=sigma,yintercept=meanSigma))
       plotObj<-plotObj+geom_boxplot(aes(x=as.factor(cluster),y=sigma,fill=as.factor(fillColor)),outlier.size=0.5)
@@ -1925,12 +1957,12 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
           probMean<-sum(probMeans*clusterSizes)/sum(clusterSizes)
           probLower<-apply(probMat,2,quantile,0.05)
           probUpper<-apply(probMat,2,quantile,0.95)
-          
+
           # Get the plot colors
           probColor<-ifelse(probLower>rep(probMean,length(probLower)),"high",
                             ifelse(probUpper<rep(probMean,length(probUpper)),"low","avg"))
-          
-          
+
+
           for(c in whichClusters){
             profileDF<-rbind(profileDF,data.frame("prob"=probMat[,c],"cluster"=rep(c,nPoints),
                                                   "category"=rep(k-1,nPoints),
@@ -1939,7 +1971,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                                   "upperProb"=rep(probUpper[c],nPoints),
                                                   "fillColor"=rep(probColor[c],nPoints)))
             rownames(profileDF)<-seq(1,nrow(profileDF),1)
-            
+
           }
         }
         plotObj<-ggplot(profileDF)
@@ -1961,8 +1993,8 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         plotObj<-plotObj+theme(plot.margin=unit(c(0.5,ifelse(j==nCovariates,1,0),0.5,ifelse(j==1,0.5,0)),'lines'))+
           theme(plot.margin=unit(c(0,0,0,0),'lines'))
         print(plotObj,vp=viewport(layout.pos.row=1:6,layout.pos.col=j+plotRiskFlag))
-        
-      } else {			
+
+      } else {
         # Plot the means
         profileDF<-data.frame("mu"=c(),"cluster"=c(),"muMean"=c(),
                               "lowerMu"=c(),"upperMu"=c(),"fillColor"=c())
@@ -1978,7 +2010,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         # The next line is to avoid outliers spoiling plot scales
         plotMax<-max(muUpper)
         plotMin<-min(muLower)
-        
+
         # Get the plot colors
         muColor<-ifelse(muLower>rep(muMean,length(muLower)),"high",
                         ifelse(muUpper<rep(muMean,length(muUpper)),"low","avg"))
@@ -1993,7 +2025,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                                 "fillColor"=rep(muColor[c],nPoints)))
         }
         rownames(profileDF)<-seq(1,nrow(profileDF),1)
-        
+
         plotObj<-ggplot(profileDF)
         plotObj<-plotObj+geom_hline(aes(x=as.factor(cluster),y=mu,yintercept=meanMu))
         plotObj<-plotObj+geom_boxplot(aes(x=as.factor(cluster),y=mu,fill=as.factor(fillColor)),outlier.size=0.5)
@@ -2012,9 +2044,9 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         plotObj<-plotObj+
           theme(plot.margin=unit(c(0.5,ifelse(j==nCovariates,1,0),0.5,ifelse(j==1,0.5,0)),'lines'))+
           theme(plot.margin=unit(c(0,0,0,0),'lines'))
-        
+
         print(plotObj,vp=viewport(layout.pos.row=1:3,layout.pos.col=j+plotRiskFlag))
-        
+
         # Plot the variances
         profileDF<-data.frame("sigma"=c(),"cluster"=c(),"sigmaMean"=c(),
                               "lowerSigma"=c(),"upperSigma"=c(),"fillColor"=c())
@@ -2029,7 +2061,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         sigmaUpper<-apply(sigmaMat,2,quantile,0.95)
         # The next line is to avoid outliers spoiling plot scales
         plotMax<-max(sigmaUpper)
-        
+
         # Get the plot colors
         sigmaColor<-ifelse(sigmaLower>rep(sigmaMean,length(sigmaLower)),"high",
                            ifelse(sigmaUpper<rep(sigmaMean,length(sigmaUpper)),"low","avg"))
@@ -2063,11 +2095,11 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
           theme(plot.margin=unit(c(0,0,0,0),'lines'))
         print(plotObj,vp=viewport(layout.pos.row=4:6,layout.pos.col=j+plotRiskFlag))
       }
-      
+
     }
   }
   dev.off()
-  
+
   ##//RJ new plot for longitudinal data
   if(yModel=='Longitudinal'){
     longFile <- paste(strsplit(outFile,"\\.")[[1]][1],'-trajectories-data.png',sep="")
@@ -2075,7 +2107,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
     plotLayout<-grid.layout(ncol = 1, nrow = 1)
     grid.newpage()
     pushViewport(viewport(layout = plotLayout))
-    
+
     GPDF<-data.frame("time"=c(),"mu"=c(),"cluster"=c(),"sigma"=c(),"fillColor"=c())
     times <- longMat$time
     yData <- longMat$outcome
@@ -2083,38 +2115,49 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
     palette <- rainbow(max(whichClusters))
     times_c <- list()
     yData_c <- list()
+
     for(c in whichClusters){
       times_c <- unlist(lapply(1:nSubjects,function(x)if(clustering[x]==c) times[tMat[x,1]:tMat[x,2]]))
       yData_c <- unlist(lapply(1:nSubjects,function(x)if(clustering[x]==c) yData[tMat[x,1]:tMat[x,2]]))
-      params <- GPfun(t0=times_c,ts=tTimes,y=yData_c,Lp=LMeans[c,])
-      GPDF <- rbind(GPDF,data.frame("time"=tTimes,"mu"=params$mu+longMean,
+      params <- GPfun(t0=times_c,ts=tTimes,y=yData_c,Lp=LMeans[c,],kernel)
+
+      GPDF2 <- data.frame("time"=tTimes,"mu"=params$mu+longMean,
                                     "cluster"=rep(c,times=length(tTimes)),
                                     "sigma"=1.645*sqrt(diag(params$GPSigma)),
-                                    "fillColor"=riskColor[c]))
-      
+                                    "fillColor"=riskColor[c])
+
+      observed_times_c<-c(min(times_c),max(times_c))
+      if(extrapolation==F & length(which(tTimes<observed_times_c[1]|tTimes>observed_times_c[2] ))>0){
+        GPDF2$mu[which(tTimes<observed_times_c[1]|tTimes>observed_times_c[2])]<-NA
+        GPDF2$sigma[which(tTimes<observed_times_c[1]|tTimes>observed_times_c[2] )]<-NA
+      }
+
+      GPDF <- rbind(GPDF,GPDF2)
     }
     rownames(GPDF)<-seq(1,nrow(GPDF),1)
     plotObj <- ggplot(GPDF)
+
     for(i in 1:nSubjects){
       df <- (data.frame(x=times[tMat[i,1]:tMat[i,2]],y=yData[tMat[i,1]:tMat[i,2]]+longMean))
       plotObj <- plotObj + geom_line(data=df,aes(x,y),colour='azure4')
     }
+
     plotObj <- plotObj + geom_line(aes(x=time,y=mu,group=cluster,colour=as.factor(cluster)),size=2)
     plotObj <- plotObj + geom_line(aes(x=time,y=mu+sigma,group=cluster,colour=as.factor(cluster)))
     plotObj <- plotObj + geom_line(aes(x=time,y=mu-sigma,group=cluster,colour=as.factor(cluster)))
     plotObj <- plotObj + labs(color="Cluster")
     plotObj <- plotObj + labs(y="Score\n")+theme(axis.title.y=element_text(size=30,angle=90))
     plotObj <- plotObj + labs(x="\nTime")+theme(axis.title.x=element_text(size=30))
-    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma),max(GPDF$mu+GPDF$sigma)))
+    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma,na.rm=T),max(GPDF$mu+GPDF$sigma,na.rm=T)))
     plotObj <- plotObj + theme(axis.text.x=element_text(size=30)) + theme(axis.text.y=element_text(size=30))
-    plotObj <- plotObj + theme(axis.line.x = element_line(colour="black",size=2), 
+    plotObj <- plotObj + theme(axis.line.x = element_line(colour="black",size=2),
                                axis.line.y = element_line(colour="black",size=2))
     plotObj <- plotObj + theme(legend.title=element_text(size=30)) + theme(legend.text=element_text(size=25))
     plotObj <- plotObj + theme(plot.title=element_text(size=30))
-    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma),max(GPDF$mu+GPDF$sigma)))
+    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma,na.rm=T),max(GPDF$mu+GPDF$sigma,na.rm=T)))
     print(plotObj,vp=viewport(layout.pos.row=1,layout.pos.col=1))
     dev.off()
-    
+
     ##//RJ data plot
     longFile <- paste(strsplit(outFile,"\\.")[[1]][1],'-trajectories.png',sep="")
     png(longFile,width=1200,height=800)
@@ -2128,24 +2171,24 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
     plotObj <- plotObj + labs(color="Cluster")
     plotObj <- plotObj + labs(y="Score\n")+theme(axis.title.y=element_text(size=30,angle=90))
     plotObj <- plotObj + labs(x="\nTime")+theme(axis.title.x=element_text(size=30))
-    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma),max(GPDF$mu+GPDF$sigma)))
+    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma,na.rm=T),max(GPDF$mu+GPDF$sigma,na.rm=T)))
     plotObj <- plotObj + theme(axis.text.x=element_text(size=30)) + theme(axis.text.y=element_text(size=30))
-    plotObj <- plotObj + theme(axis.line.x = element_line(colour="black",size=2), 
+    plotObj <- plotObj + theme(axis.line.x = element_line(colour="black",size=2),
                                axis.line.y = element_line(colour="black",size=2))
     plotObj <- plotObj + theme(legend.title=element_text(size=30)) + theme(legend.text=element_text(size=25))
     plotObj <- plotObj + theme(plot.title=element_text(size=30))
-    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma),max(GPDF$mu+GPDF$sigma)))
+    plotObj <- plotObj + coord_cartesian(ylim = c(min(GPDF$mu-GPDF$sigma,na.rm=T),max(GPDF$mu+GPDF$sigma,na.rm=T)))
     print(plotObj,vp=viewport(layout.pos.row=1,layout.pos.col=1))
     dev.off()
   }
-  
+
   if(yModel=='MVN'){
     png(paste(strsplit(outFile,"\\.")[[1]][1],'-MVN.png',sep=""),width=1200,height=800)
   	plotLayout<-grid.layout(ncol = nOutcomes, nrow = 6)
 	grid.newpage()
   	pushViewport(viewport(layout = plotLayout))
-  
-    for(j in 1:nOutcomes){ 
+
+    for(j in 1:nOutcomes){
       # Plot the means
       profileDF<-data.frame("mu"=c(),"cluster"=c(),"muMean"=c(),
                             "lowerMu"=c(),"upperMu"=c(),"fillColor"=c())
@@ -2157,7 +2200,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       # The next line is to avoid outliers spoiling plot scales
       plotMax<-max(muUpper)
       plotMin<-min(muLower)
-      
+
       # Get the plot colors
       muColor<-ifelse(muLower>rep(muMean,length(muLower)),"high",
                       ifelse(muUpper<rep(muMean,length(muUpper)),"low","avg"))
@@ -2171,9 +2214,9 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
                                               "upperMu"=rep(muUpper[c],nPoints),
                                               "fillColor"=rep(muColor[c],nPoints)))
       }
-      
+
       rownames(profileDF)<-seq(1,nrow(profileDF),1)
-      
+
       plotObj<-ggplot(profileDF)
       plotObj<-plotObj+geom_hline(aes(x=as.factor(cluster),y=mu,yintercept=meanMu))
       plotObj<-plotObj+geom_boxplot(aes(x=as.factor(cluster),y=mu,fill=as.factor(fillColor)),outlier.size=0.5)
@@ -2193,7 +2236,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
         theme(plot.margin=unit(c(0.5,ifelse(j==nOutcomes,1,0),0.5,ifelse(j==1,0.5,0)),'lines'))+
         theme(plot.margin=unit(c(0,0,0,0),'lines'))
       print(plotObj,vp=viewport(layout.pos.row=1:3,layout.pos.col=j))
-      
+
       # Plot the variances
       profileDF<-data.frame("sigma"=c(),"cluster"=c(),"sigmaMean"=c(),
                             "lowerSigma"=c(),"upperSigma"=c(),"fillColor"=c())
@@ -2206,7 +2249,7 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
       sigmaMean<-sum(sigmaMeans*clusterSizes)/sum(clusterSizes)
       # The next line is to avoid outliers spoiling plot scales
       plotMax<-max(sigmaUpper)
-        
+
       # Get the plot colors
       sigmaColor<-ifelse(sigmaLower>rep(sigmaMean,length(sigmaLower)),"high",
                          ifelse(sigmaUpper<rep(sigmaMean,length(sigmaUpper)),"low","avg"))
@@ -2242,50 +2285,66 @@ plotRiskProfile<-function(riskProfObj,outFile,showRelativeRisk=F,orderBy=NULL,wh
     }
     dev.off()
   }
-  
+
   return(meanSortIndex)
 }
 
 ##//RJ functions to compute GP posterior in R
-GP_cov <- function(times,L){
+GP_cov <- function(times,L,kernelType){
   nTimes = length(times)
   Mat <- matrix(0,nTimes,nTimes)
   for(i in 2:nTimes){
     for(j in 1:i){
-      a=-1.0/2.0/L[2]*(times[i]-times[j])*(times[i]-times[j])
-      Mat[i,j]=L[1]*exp(a);
+        if(kernelType=="SQexponential"){
+          a=-1.0/2.0/L[2]*(times[i]-times[j])*(times[i]-times[j])
+          Mat[i,j]=L[1]*exp(a)
+        }else{
+          a=L[1]+L[2]*(times[i]-L[4])*(times[j]-L[4])
+          Mat[i,j]=a*a #+ L[4];
+        }
     }
-  }	
+  }
   Mat=Mat+t(Mat);
   for(i in 1:nTimes){
-    Mat[i,i]=L[3]+L[1]
+    if(kernelType=="SQexponential"){
+      Mat[i,i]=L[3]+L[1]
+    }else{
+      a=L[1]+L[2]*(times[i]-L[4])*(times[i]-L[4])
+      Mat[i,i]=a*a + L[3]
+    }
   }
   return(Mat)
 }
-GP_cov_star <- function(X1,X2,Lp){
+
+GP_cov_star <- function(X1,X2,Lp,kernelType){
   Mat <- matrix(rep(0,length(X1)*length(X2)),nrow=length(X1))
   for(i in 1:nrow(Mat))
     for(j in 1:ncol(Mat))
-      Mat[i,j] <- Lp[1]*exp(-0.5*(X1[i]-X2[j])^2/Lp[2])
+      if(kernelType=="SQexponential"){
+        Mat[i,j] <- Lp[1]*exp(-0.5*(X1[i]-X2[j])^2/Lp[2])
+      }else{
+        a <- Lp[1]+Lp[2]*(X1[i]-Lp[4])*(X2[j]-Lp[4])
+        Mat[i,j] <- a**2
+      }
+
   return(Mat)
 }
 
-GPfun <- function(t0,ts,y,Lp){
-  Kstar <- GP_cov(ts,exp(Lp))
-  Ks0 <- GP_cov_star(ts,t0,exp(Lp))
-  K0 <- GP_cov(t0,exp(Lp))
+GPfun <- function(t0,ts,y,Lp,kernelType){
+  Kstar <- GP_cov(ts,exp(Lp),kernelType)
+  Ks0 <- GP_cov_star(ts,t0,exp(Lp),kernelType)
+  K0 <- GP_cov(t0,exp(Lp),kernelType)
   mat <- Ks0 %*% solve(K0)
-  GPSigma <- Kstar - mat %*% t(Ks0) 
+  GPSigma <- Kstar - mat %*% t(Ks0)
   mu <- 0 + mat %*% (y - 0)
-  GPSigma <- (GPSigma+t(GPSigma))/2 
+  GPSigma <- (GPSigma+t(GPSigma))/2
   return(list(mu=mu,GPSigma=GPSigma))
 }
 
 
-
 # Calculate predictions, and if possible assess predictive performance
 calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwell=F, fullSweepPredictions=F,fullSweepLogOR=F,fullSweepHazardRatio=F){
-  
+
   riskProfClusObj=NULL
   clusObjRunInfoObj=NULL
   yModel=NULL
@@ -2301,18 +2360,19 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
   nCategoriesY=NULL
   nSubjects=NULL
   weibullFixedShape=NULL
-  
+  kernel=NULL
+
   for (i in 1:length(riskProfObj)) assign(names(riskProfObj)[i],riskProfObj[[i]])
   for (i in 1:length(riskProfClusObj)) assign(names(riskProfClusObj)[i],riskProfClusObj[[i]])
   for (i in 1:length(clusObjRunInfoObj)) assign(names(clusObjRunInfoObj)[i],clusObjRunInfoObj[[i]])
-  
+
   if(yModel=="Poisson"||yModel=="Normal"){
     if (fullSweepLogOR==T){
       fullSweepLogOR<-F
       cat("Log odds ratio does not make sense for Poisson or Normal response\n")
     }
   }
-  
+
   ##//RJ fullSweepPredictions=T for Longitudinal and MVN
   if(yModel=="Longitudinal"||yModel=="MVN"){
   	if(fullSweepPredictions==F){
@@ -2320,7 +2380,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       cat("Full sweep predictions used for Longitudinal or MVN outcome.\n")
     }
   }
-  
+
   if(!yModel=="Survival"){
     if (fullSweepHazardRatio==T){
       fullSweepHazardRatio=F
@@ -2331,20 +2391,20 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       cat("For Survival response with cluster specific shape parameter Rao-Blackwell predictions are not possible.\n")
     }
   }
-  
+
   if (yModel=="Survival"){
     restrictedMeanSurvival<-max(clusObjRunInfoObj$yMat[,1])
-  } 
-  
+  }
+
   firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
   lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
   nSamples<-lastLine-firstLine+1
-  
+
   # First of all we see if there a covariate file has been supplied
   if(nPredictSubjects==0){
     stop("No prediction subjects processed by C++\n")
   }
-  
+
   # Get the response and fixed effects data if available
   responseProvided<-F
   extraInfoProvided<-F # extra info is denominator for binomial and poisson
@@ -2373,7 +2433,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       predictWMat[predictWMat==-999]<-0
     }
   }
-  
+
   if(fixedEffectsProvided){
     betaFileName <-file.path(directoryPath,paste(fileStem,'_beta.txt',sep=''))
     betaFile<-file(betaFileName,open="r")
@@ -2395,7 +2455,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       betaArray[sweep-firstLine+1,,]<-currBeta
     }
   }
-  
+
   if (yModel=="Survival"){
     if (weibullFixedShape){
       nuFileName<-file.path(directoryPath,paste(fileStem,'_nu.txt',sep=''))
@@ -2403,16 +2463,16 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       nu<-mean(read.table(nuFile)[,1])
       close(nuFile)
     }
-  } 
-  
+  }
+
   ##//RJ
   if(yModel=='Longitudinal'){
     timepoints <- seq(min(longMat$time),max(longMat$time),length.out=20)
-    thetaArray<-array(0,dim=c(nSamples,nPredictSubjects,length(timepoints))) 
-    varArray <- array(0,dim=c(nSamples,nPredictSubjects,length(timepoints))) 
+    thetaArray<-array(0,dim=c(nSamples,nPredictSubjects,length(timepoints)))
+    varArray <- array(0,dim=c(nSamples,nPredictSubjects,length(timepoints)))
   }else if(yModel=="MVN"){
-    thetaArray<-array(0,dim=c(nSamples,nPredictSubjects,nOutcomes)) 
-    varArray <- array(0,dim=c(nSamples,nPredictSubjects,nOutcomes)) 
+    thetaArray<-array(0,dim=c(nSamples,nPredictSubjects,nOutcomes))
+    varArray <- array(0,dim=c(nSamples,nPredictSubjects,nOutcomes))
   }else{
     # initialise theta and beta arrays
     thetaArray<-array(0,dim=c(nSamples,nPredictSubjects,nCategoriesY))
@@ -2454,7 +2514,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       nuFile<-file(nuFileName,open="r")
       nuArrayPred<-array(0,dim=c(nSamples,nPredictSubjects))
     }
-    
+
     for(sweep in firstLine:lastLine){
       if(sweep==firstLine){
         skipVal<-firstLine-1
@@ -2470,15 +2530,15 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
         currTheta<-matrix(currThetaVector,ncol=(nCategoriesY-1),byrow=T)
         currTheta<-cbind(rep(0,dim(currTheta)[1]),currTheta)
       } else if (yModel=="Longitudinal") {
-        currThetaVector<-scan(LFile,what=double(),skip=skipVal,n=currNClusters*3,quiet=T)
-        params<-matrix(currThetaVector,ncol=3,byrow=T)
+        currThetaVector<-scan(LFile,what=double(),skip=skipVal,n=currNClusters*ifelse(kernel=="SQexponential",3,4),quiet=T)
+        params<-matrix(currThetaVector,ncol=ifelse(kernel=="SQexponential",3,4),byrow=T)
         currTheta <- matrix(0,ncol=length(timepoints),nrow=dim(params)[1])
         currVar <- matrix(0,ncol=length(timepoints),nrow=dim(params)[1])
         for(c in 1:dim(params)[1]){
           times_c <- unlist(lapply(1:nSubjects,function(x)if(tmpCurrZ[x]==c) longMat$time[tMat[x,1]:tMat[x,2]]))
           if(length(times_c>0)){
             yData_c <- unlist(lapply(1:nSubjects,function(x)if(tmpCurrZ[x]==c) longMat$outcome[tMat[x,1]:tMat[x,2]]))
-            GPparams <- GPfun(t0=times_c,ts=timepoints,y=yData_c,Lp=params[c,])
+            GPparams <- GPfun(t0=times_c,ts=timepoints,y=yData_c,Lp=params[c,],kernel)
             currTheta[c,] <- GPparams$mu
             currVar[c,] <- diag(GPparams$GPSigma)
           }
@@ -2504,10 +2564,10 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       }
       thetaArray[sweep-firstLine+1,,]<-as.matrix(currTheta[currZ,],ncol=dim(thetaArray)[3])
       if(yModel=='Longitudinal'||yModel=="MVN"){
-        varArray[sweep-firstLine+1,,]<-as.matrix(currVar[currZ,],ncol=dim(thetaArray)[3]) 
+        varArray[sweep-firstLine+1,,]<-as.matrix(currVar[currZ,],ncol=dim(thetaArray)[3])
       }
       if (yModel=="Survival"&&!weibullFixedShape) nuArrayPred[sweep-firstLine+1,]<-as.vector(currNu[currZ])
-      
+
     }
     close(zFile)
     close(thetaFile)
@@ -2520,7 +2580,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
     close(nClustersFile)
     if (yModel=="Survival"&&!weibullFixedShape) close(nuFile)
   }
-  
+
   # Use the values of theta to derive the predicted values
   if(yModel=='Longitudinal'){
     predictedY<-array(0,dim=c(nSamples,nPredictSubjects,length(timepoints)))
@@ -2535,20 +2595,20 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
     if(sweep==1||sweep%%1000==0){
       cat(paste("Processing sweep",sweep,"of ",nSamples,"\n"))
     }
-    
+
     lambda<-thetaArray[sweep,,]
     if(fixedEffectsProvided){
       currBeta<-betaArray[sweep,,]
       lambda<-lambda+predictWMat%*%currBeta
     }
-    
+
     if(yModel=='Poisson'){
       if(extraInfoProvided){
         # Add in the offset
         lambda<-lambda+log(predictYMat[,2])
       }
     }
-    
+
     if(yModel=='Bernoulli'){
       predictedY[sweep,,]<-exp(lambda)/(1+exp(lambda))
     }else if(yModel=='Binomial'){
@@ -2614,7 +2674,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
       fullHR[i,]<-predictedY[i,,]/predictedY[i,1,]
     }
     output$fullHR<-fullHR
-    
+
   }
   if(fixedEffectsProvided){
     close(betaFile)
@@ -2624,7 +2684,7 @@ calcPredictions<-function(riskProfObj,predictResponseFileName=NULL, doRaoBlackwe
 
 # Show the continuous hyperparameter for variable selection
 summariseVarSelectRho<-function(runInfoObj){
-  
+
   directoryPath=NULL
   fileStem=NULL
   nCovariates=NULL
@@ -2632,31 +2692,31 @@ summariseVarSelectRho<-function(runInfoObj){
   nBurn=NULL
   nFilter=NULL
   nSweeps=NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
-  
+
   # Rho file name
   rhoFileName <- file.path(directoryPath,paste(fileStem,'_rho.txt',sep=''))
   rhoMat<-matrix(scan(rhoFileName,what=double(),quiet=T),ncol=nCovariates,byrow=T)
-  
+
   # Restrict to after burn in
   firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
   lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
-  
+
   rhoMat<-rhoMat[firstLine:lastLine,]
-  
+
   rhoMean<-apply(rhoMat,2,mean)
   rhoMedian<-apply(rhoMat,2,median)
   rhoLowerCI<-apply(rhoMat,2,quantile,0.05)
   rhoUpperCI<-apply(rhoMat,2,quantile,0.95)
-  
+
   return(list("rho"=rhoMat,"rhoMean"=rhoMean,"rhoMedian"=rhoMedian,"rhoLowerCI"=rhoLowerCI,"rhoUpperCI"=rhoUpperCI))
-  
-}	
+
+}
 
 # Function to compute the marginal model posterior (only for discrete covariates and Bernoulli outcome)
 margModelPosterior<-function(runInfoObj,allocation){
-  
+
   xModel=NULL
   yModel=NULL
   varSelect=NULL
@@ -2673,9 +2733,9 @@ margModelPosterior<-function(runInfoObj,allocation){
   nProgress=NULL
   dPitmanYor=NULL
   nCovariates=NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
-  
+
   # this function only works for Bernoulli outcome and discrete covariates, so check that it is used correctly
   if (includeResponse) {
     if (xModel!="Discrete"||yModel!="Bernoulli") stop("ERROR: The computation of the marginal model posterior has only been implemented for Bernoulli outcome and discrete covariates.")
@@ -2698,48 +2758,48 @@ margModelPosterior<-function(runInfoObj,allocation){
   }
   # this function only works for dPitmanYor == 0, ie only for Dirichlet process prior
   if (runInfoObj$dPitmanYor !=0) stop("ERROR: the marginal model posterior has only been implemented for Dirichlet process priors.")
-  
+
   # read in value of hyperparameters
   runData<-readLines(file.path(directoryPath,paste(fileStem,'_log.txt',sep='')))
-  
+
   hyperParams<-list()
-  
+
   if (includeResponse==T){
     sigmaTheta<-runData[grep('sigmaTheta',runData)]
     sigmaTheta<-substr(sigmaTheta,regexpr(':',sigmaTheta)+1,nchar(sigmaTheta))
     sigmaTheta<-gsub(' ','',sigmaTheta)
     sigmaTheta<-gsub('\t','',sigmaTheta)
     sigmaTheta<-as.integer(sigmaTheta)
-    
+
     dofTheta<-runData[grep('dofTheta',runData)]
     dofTheta<-substr(dofTheta,regexpr(':',dofTheta)+1,nchar(dofTheta))
     dofTheta<-gsub(' ','',dofTheta)
     dofTheta<-gsub('\t','',dofTheta)
     dofTheta<-as.integer(dofTheta)
-    
+
     hyperParams<-list(sigmaTheta=sigmaTheta,dofTheta=dofTheta)
   }
-  
+
   if (nFixedEffects>0){
     sigmaBeta<-runData[grep('sigmaBeta',runData)]
     sigmaBeta<-substr(sigmaBeta,regexpr(':',sigmaBeta)+1,nchar(sigmaBeta))
     sigmaBeta<-gsub(' ','',sigmaBeta)
     sigmaBeta<-gsub('\t','',sigmaBeta)
     sigmaBeta<-as.integer(sigmaBeta)
-    
+
     dofBeta<-runData[grep('dofBeta',runData)]
     dofBeta<-substr(dofBeta,regexpr(':',dofBeta)+1,nchar(dofBeta))
     dofBeta<-gsub(' ','',dofBeta)
     dofBeta<-gsub('\t','',dofBeta)
     dofBeta<-as.integer(dofBeta)
-    
+
     hyperParams$sigmaBeta<-sigmaBeta
     hyperParams$dofBeta<-dofBeta
   }
-  
-  
+
+
   # set alpha, whether it has been estimated or it is fixed
-  # find out if it was fixed or estimated 
+  # find out if it was fixed or estimated
   alphaUpdate<-runData[grep('Update alpha',runData)]
   alphaUpdate<-substr(alphaUpdate,regexpr(':',alphaUpdate)+1,nchar(alphaUpdate))
   alphaUpdate<-gsub(' ','',alphaUpdate)
@@ -2751,7 +2811,7 @@ margModelPosterior<-function(runInfoObj,allocation){
     # if alpha wasn't fixed, take median value of chain
     firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
     skipLines<-ifelse(reportBurnIn,nBurn/nFilter+1,0)
-    lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter		
+    lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
     alphaFileName <- file(file.path(directoryPath,paste(fileStem,'_alpha.txt',sep='')))
     open(alphaFileName)
     alphaValues<-vector()
@@ -2763,7 +2823,7 @@ margModelPosterior<-function(runInfoObj,allocation){
     alpha<-median(alphaValues)
   }
   runInfoObj$alphaMPP <- alpha
-  
+
   if (xModel=="Discrete"){
     aPhi<-runData[grep('aPhi',runData)]
     aPhi<-substr(aPhi,regexpr(':',aPhi)+1,nchar(aPhi))
@@ -2771,14 +2831,14 @@ margModelPosterior<-function(runInfoObj,allocation){
     aPhi<-as.integer(aPhi)
     hyperParams$aPhi<-aPhi
   }
-  
+
   runInfoObj$hyperParams <- hyperParams
-  
+
   # read first allocation iteration after burnin
   firstLine<-ifelse(reportBurnIn,nBurn/nFilter+1,1)
   skipLines<-ifelse(reportBurnIn,nBurn/nFilter,0)
-  lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter	
-  
+  lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
+
   # open allocation file
   if (missing(allocation)){
     zFileName <- file(file.path(directoryPath,paste(fileStem,'_z.txt',sep='')))
@@ -2791,11 +2851,11 @@ margModelPosterior<-function(runInfoObj,allocation){
     skipLines<-0
     lastLine<-0
   }
-  
-  
+
+
   # initialise output vectors
   margModPost<-rep(0,length=(lastLine-firstLine+1))
-  
+
   clusterSizes<-table(zAllocCurrent)
   nClusters<-length(clusterSizes)
   # set initial values of parameters of interest
@@ -2805,7 +2865,7 @@ margModelPosterior<-function(runInfoObj,allocation){
     parFirstIter<-c(rep(0,nClusters))
   }
   # compute marginal model posterior
-  
+
   output<-.pZpXpY(zAlloc=zAllocCurrent, par=parFirstIter, clusterSizes=clusterSizes, nClusters=nClusters, runInfoObj=runInfoObj, alpha=alpha)
   margModPost[1]<-output$margModPost
   if (missing(allocation)){
@@ -2820,22 +2880,22 @@ margModelPosterior<-function(runInfoObj,allocation){
       # number of clusters
       nClusters<-length(clusterSizes)
       # computing the marginal likelihood
-      # version using the previous beta mode for next step	
+      # version using the previous beta mode for next step
       if (nFixedEffects>0){
         parTmp<-c(rep(0,nClusters),rep(0,nFixedEffects))
       } else {
         parTmp<-c(rep(0,nClusters))
       }
-      
+
       output<-.pZpXpY(zAlloc=zAllocCurrent,par=parTmp, clusterSizes=clusterSizes, nClusters=nClusters, runInfoObj = runInfoObj, alpha=alpha)
       margModPost[iter-firstLine+1]<-output$margModPost
-      
-    }	
+
+    }
   }
   if (missing(allocation)){
     close(zFileName)
   }
-  
+
   write.table(margModPost,file.path(directoryPath,paste(fileStem,"_margModPost.txt",sep="")), col.names = FALSE,row.names = FALSE)
   return(list("meanMargModPost"=mean(margModPost),"runInfoObj"=runInfoObj))
 }
@@ -2860,7 +2920,7 @@ margModelPosterior<-function(runInfoObj,allocation){
   out<-.Call('pYGivenZW',beta,theta,zAlloc,hyperParams$sigmaBeta,
              hyperParams$sigmaTheta,hyperParams$dofTheta,hyperParams$dofBeta,nSubjects,
              yMat,betaW,nFixedEffects,nTableNames,constants,
-             maxNTableNames,PACKAGE = 'PReMiuM')
+             maxNTableNames,PACKAGE = 'PReMiuMar')
   return(out)
 }
 
@@ -2877,14 +2937,14 @@ margModelPosterior<-function(runInfoObj,allocation){
     betaW<-as.matrix(wMat)%*%beta
     yPred<-.Call('GradpYGivenZW',beta,theta,zAlloc,nSubjects,
                  betaW,yMat,nFixedEffects,nTableNames,
-                 maxNTableNames,PACKAGE = 'PReMiuM')
+                 maxNTableNames,PACKAGE = 'PReMiuMar')
     wPred<- as.matrix(wMat)*yPred
   } else {
     beta<-0
     betaW<-0
     yPred<-.Call('GradpYGivenZW',beta,theta,zAlloc,nSubjects,
                  betaW,yMat,nFixedEffects,nTableNames,
-                 maxNTableNames,PACKAGE = 'PReMiuM')
+                 maxNTableNames,PACKAGE = 'PReMiuMar')
   }
   gr.theta<-rep(0,nClusters)
   for (k in 1:nClusters){
@@ -2896,13 +2956,13 @@ margModelPosterior<-function(runInfoObj,allocation){
   gr.theta<-gr.theta-numeratorTheta/(paramsTheta+theta^2)
   out<- -c(gr.theta)/nSubjects
   if (nFixedEffects>0){
-    # contribution from the derivative of beta		
+    # contribution from the derivative of beta
     gr.beta<-rep(0,nFixedEffects)
     gr.beta<-gr.beta+apply(wPred,2,sum)
     numeratorBeta<-(hyperParams$dofBeta+1)*beta
     paramsBeta<-hyperParams$dofBeta*hyperParams$sigmaBeta^2
     gr.beta<-gr.beta-numeratorBeta/(paramsBeta+beta^2)
-    out<- c(out,-gr.beta/nSubjects)	
+    out<- c(out,-gr.beta/nSubjects)
   }
   return(out)
 }
@@ -2928,7 +2988,7 @@ margModelPosterior<-function(runInfoObj,allocation){
   thetaTmp<-rep(0,length=max(as.integer(nTableNames)))
   k<-1
   for (i in as.integer(nTableNames)+1) {
-    thetaTmp[i]<-theta[k]	
+    thetaTmp[i]<-theta[k]
     k<-k+1
   }
   for (i in 1:nSubjects){
@@ -2948,7 +3008,7 @@ margModelPosterior<-function(runInfoObj,allocation){
     diag(hes.mat)[k]<-sum(denomPred[zAlloc==nTableNames[k]]) + (hyperParams$dofTheta+1)*
       (paramsTheta - theta[k]^2)/
       (paramsTheta + theta[k]^2)^2
-    
+
   }
   if (nFixedEffects>0){
     # wrt beta_i, theta_j is
@@ -2971,19 +3031,19 @@ margModelPosterior<-function(runInfoObj,allocation){
     # wrt beta_i, beta_i is
     betaSq<-beta*beta
     paramsBeta<-hyperParams$dofBeta*hyperParams$sigmaBeta^2
-    diag(hes.mat)[(nClusters+1):(dimThetaBeta)]<- 
+    diag(hes.mat)[(nClusters+1):(dimThetaBeta)]<-
       apply(wMat^2 * denomPred,2,sum)+(hyperParams$dofBeta+1)*
       (paramsBeta - betaSq)/
       (paramsBeta + betaSq)^2
   }
-  return(hes.mat/nSubjects) 
-}	
+  return(hes.mat/nSubjects)
+}
 
 
 # internal function
 # marginal model posterior for one iteration
 .pZpXpY<-function(zAlloc,runInfoObj,par=NULL,clusterSizes,nClusters,alpha){
-  
+
   nSweeps=NULL
   nFixedEffects=NULL
   nCategories=NULL
@@ -2995,25 +3055,25 @@ margModelPosterior<-function(runInfoObj,allocation){
   wMat=NULL
   nSubjects=NULL
   alphaMPP=NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
-  
+
   # marginal likelihood is p(Z|alpha,X,Y)
-  
+
   # p(Z|alpha,X,Y) is prop to p(X|Z)p(Y|Z,W)p(Z|alpha)
   # we are going to call the three quantities pX, pY and pZ
-  
+
   nTableNames<-names(clusterSizes)
-  
-  # set initial parameters at 0 if a better starting point is not provided	
+
+  # set initial parameters at 0 if a better starting point is not provided
   if (is.null(par)) par<-c(rep(0,nClusters),rep(0,nFixedEffects))
-  
+
   # number of elements in following clusters
-  nPlus<-head(c(rev(cumsum(rev(clusterSizes[-1]))),0),-1)	
-  
+  nPlus<-head(c(rev(cumsum(rev(clusterSizes[-1]))),0),-1)
+
   # computation of pX+pZ
-  pZpX<-.Call('pZpX',nClusters,nCategories,hyperParams$aPhi,clusterSizes,nCovariates, zAlloc, as.vector(as.matrix(xMat)), as.integer(nTableNames), alphaMPP, nPlus, PACKAGE = 'PReMiuM')
-  
+  pZpX<-.Call('pZpX',nClusters,nCategories,hyperParams$aPhi,clusterSizes,nCovariates, zAlloc, as.vector(as.matrix(xMat)), as.integer(nTableNames), alphaMPP, nPlus, PACKAGE = 'PReMiuMar')
+
   # computation of pY
   if (includeResponse==T){
     # constants of pY
@@ -3021,34 +3081,34 @@ margModelPosterior<-function(runInfoObj,allocation){
                             lgamma(0.5*(hyperParams$dofTheta+1))+0.5*log(hyperParams$dofTheta*pi)+lgamma(hyperParams$dofTheta*0.5))
     if (nFixedEffects>0) constants<-constants+nFixedEffects*(0.5*(hyperParams$dofBeta+1)*log(hyperParams$dofBeta)-
                                                                lgamma(0.5*(hyperParams$dofBeta+1))+0.5*log(hyperParams$dofBeta*pi)+lgamma(hyperParams$dofBeta*0.5))
-    # computation of min for Laplace approximation		
+    # computation of min for Laplace approximation
     laplaceOut <- optim(par = par, # initial parameters
                         fn = .pYGivenZW_Bernoulli, # function to minimise over
-                        control=list(fnscale=1), # need to minimise 
+                        control=list(fnscale=1), # need to minimise
                         method="L-BFGS-B", # fastest method according to tests
                         gr=.pYGivenZW_Bernoulli_gradient, # gradient
                         hessian=FALSE, # we don't require the approximate computation of the hessian matrix, it's computed separately and exactly
                         # other parameters necessary for fn above
-                        nClusters=nClusters, 
+                        nClusters=nClusters,
                         zAlloc=zAlloc,hyperParams=hyperParams,
                         yMat=yMat,wMat=wMat,nSubjects=nSubjects,
                         nFixedEffects=nFixedEffects,nTableNames=nTableNames,constants=constants)
-    laplaceMode <- laplaceOut$value 
-    # computation of the hessian matrix		
+    laplaceMode <- laplaceOut$value
+    # computation of the hessian matrix
     laplaceHessian <- .pYGivenZW_Bernoulli_hessianMat(laplaceOut$par,zAlloc=zAlloc,nClusters=nClusters,hyperParams=hyperParams,
                                                       wMat=wMat,nSubjects=nSubjects,
                                                       nFixedEffects=nFixedEffects,
                                                       nSweeps=nSweeps,nTableNames=nTableNames)
     pY <- -nSubjects * laplaceMode + 0.5*log(det(laplaceHessian)) -
       (nClusters+nFixedEffects)*0.5*log(nSubjects)+(nClusters+nFixedEffects)*0.5*log(2*pi)
-    margModPost <- pY+pZpX  
+    margModPost <- pY+pZpX
     output<-list(margModPost=margModPost,laplacePar=laplaceOut$par[(nClusters+1):(nClusters+nFixedEffects)],pY=pY)
   } else {
-    margModPost <- pZpX  
+    margModPost <- pZpX
     output<-list(margModPost=margModPost)
   }
   return(output)
-  
+
 }
 
 setHyperparams<-function(shapeAlpha=NULL,rateAlpha=NULL,aPhi=NULL,mu0=NULL,Tau0=NULL,R0=NULL,                         kappa0=NULL,nu0=NULL,muTheta=NULL,sigmaTheta=NULL,dofTheta=NULL,muBeta=NULL,sigmaBeta=NULL,dofBeta=NULL,shapeTauEpsilon=NULL,rateTauEpsilon=NULL,aRho=NULL,bRho=NULL,atomRho=NULL,shapeSigmaSqY=NULL,scaleSigmaSqY=NULL,                     rSlice=NULL,truncationEps=NULL,shapeTauCAR=NULL,rateTauCAR=NULL,shapeNu=NULL,scaleNu=NULL,initAlloc=NULL,                       muLSignal=0,sigmaLSignal=0,muLLengthscale=0,sigmaLLengthscale=0,muLNoise=0,sigmaLNoise=0,MVNmu0=NULL,MVNTau0=NULL,MVNR0=NULL,                         MVNkappa0=NULL,MVNnu0=NULL){
@@ -3127,7 +3187,7 @@ setHyperparams<-function(shapeAlpha=NULL,rateAlpha=NULL,aPhi=NULL,mu0=NULL,Tau0=
   }
   if (!is.null(rateTauCAR)){
     out$rateTauCAR<-rateTauCAR
-  }	
+  }
   if (!is.null(shapeNu)){
     out$shapeNu<-shapeNu
   }
@@ -3177,7 +3237,7 @@ setHyperparams<-function(shapeAlpha=NULL,rateAlpha=NULL,aPhi=NULL,mu0=NULL,Tau0=
 
 # Compute Ratio of variances (for extra variation case)
 computeRatioOfVariance<-function(runInfoObj){
-  
+
   directoryPath=NULL
   extraYVar=NULL
   fileStem=NULL
@@ -3187,11 +3247,11 @@ computeRatioOfVariance<-function(runInfoObj){
   nSubjects=NULL
   nPredictSubjects=NULL
   nBurn=NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
-  
+
   if (extraYVar==FALSE) stop("The ratio of variances can only be computed when extra variation in the response is included in the model.")
-  
+
   # Construct the number of clusters file name
   nClustersFileName <- file.path(directoryPath,paste(fileStem,'_nClusters.txt',sep=''))
   # Construct the allocation file name
@@ -3200,11 +3260,11 @@ computeRatioOfVariance<-function(runInfoObj){
   thetaFileName <- file.path(directoryPath,paste(fileStem,'_theta.txt',sep=''))
   # Construct the allocation file name
   epsilonFileName <- file.path(directoryPath,paste(fileStem,'_epsilon.txt',sep=''))
-  
+
   # Restrict to sweeps after burn in
   firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
   lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
-  
+
   ratioOfVariance<-rep(0,length(lastLine-firstLine+1))
   for(sweep in firstLine:lastLine){
     currMaxNClusters<-scan(nClustersFileName,what=integer(),skip=sweep-1,n=1,quiet=T)
@@ -3216,25 +3276,25 @@ computeRatioOfVariance<-function(runInfoObj){
     epsilonCurr<-scan(epsilonFileName,what=double(),skip=sweep-1,n=nSubjects,quiet=T)
     vEpsilon<-var(epsilonCurr)
     ratioOfVariance[sweep-firstLine+1]<-vTheta/(vTheta+vEpsilon)
-    
+
   }
   return(ratioOfVariance)
-  
+
 }
 
 # Function to convert a vector to a symmetric matrix (upper triangle)
-vec2mat<-function (data = NA, nrow = 1) 
+vec2mat<-function (data = NA, nrow = 1)
 {
   nData <- length(data)
-  
+
   nElem <- round(nrow * (nrow + 1)/2)
-  
+
   result <- matrix(NA, nrow = nrow, ncol = nrow)
-  
+
   result[lower.tri(result, diag = FALSE)] <- data
   result[upper.tri(result, diag = FALSE)] <- t(result)[upper.tri(result)]
   diag(result)<-0
-  
+
   return(result)
 }
 
@@ -3242,21 +3302,21 @@ vec2mat<-function (data = NA, nrow = 1)
 # Some re-ordering of the observations is happening automatically
 heatDissMat<-function(dissimObj,main=NULL,xlab=NULL,ylab=NULL)
 {
-  
+
   nSbj<-dissimObj$disSimRunInfoObj$nSubjects
-  
+
   col.labels<-c("0","0.5","1")
   colours <- colorRampPalette(c("white","black"))(10)
-  
+
   dissMat<-vec2mat(dissimObj$disSimMat,nrow=nSbj)
   heatmap(1-dissMat, keep.dendro=FALSE,symm=TRUE, Rowv=NA, labRow=FALSE, labCol=FALSE, margins=c(4.5,4.5), col= colours ,main = main, xlab=xlab, ylab=ylab)
   color.legend(0.95,0.7,1,1,legend = col.labels, colours, gradient="y",align="rb")
-  
+
 }
 
-# function to plot the trace of the global parameters 
+# function to plot the trace of the global parameters
 globalParsTrace<-function(runInfoObj, parameters = "nClusters",plotBurnIn=FALSE,whichBeta=1){
-  
+
   directoryPath=NULL
   fileStem=NULL
   nSweeps=NULL
@@ -3265,21 +3325,21 @@ globalParsTrace<-function(runInfoObj, parameters = "nClusters",plotBurnIn=FALSE,
   nBurn=NULL
   reportBurnIn=NULL
   alpha= NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
-  
+
   if (parameters=="mpp") {
     parametersIn<-"margModPost"
   } else {
     parametersIn<-parameters
   }
-  
+
   # Construct the parameter file name
   parFileName <- file.path(directoryPath,paste(fileStem,"_",parametersIn,".txt",sep=""))
-  
+
   # read the data in
   parData<-read.table(parFileName)
-  
+
   if(parameters== "nClusters") ylabPar<- "Number of clusters"
   if(parameters=="mpp") ylabPar<-"Log marginal model posterior"
   if(parameters=="beta") ylabPar<-"beta"
@@ -3287,17 +3347,17 @@ globalParsTrace<-function(runInfoObj, parameters = "nClusters",plotBurnIn=FALSE,
     if (alpha < -1) {
       ylabPar<-"alpha"
     } else {
-      stop("ERROR: Parameter alpha is random only for the Dirichlet process prior with random alpha.") 
+      stop("ERROR: Parameter alpha is random only for the Dirichlet process prior with random alpha.")
     }
   }
-  
+
   xlabPars<-"Sweeps (after burn in)"
-  
-  
+
+
   if(plotBurnIn==TRUE){
     if (parameters=="mpp") stop("The mpp is only computed after the burn in. Set plotBurnIn=FALSE.")
     if (reportBurnIn==TRUE) {
-      
+
       rangeSweeps<-1:((nBurn+nSweeps)/nFilter)
       rangeParData<-1:(length(rangeSweeps)/nFilter)
       xlabPars<-"Sweeps (including the burn in)"
@@ -3309,7 +3369,7 @@ globalParsTrace<-function(runInfoObj, parameters = "nClusters",plotBurnIn=FALSE,
       firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
       lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
       rangeSweeps<-firstLine:lastLine#(nBurn+1):(nBurn+nSweeps)
-      rangeParData<-1:(nSweeps)	
+      rangeParData<-1:(nSweeps)
     } else {
       if (reportBurnIn==TRUE) {
         firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
@@ -3320,12 +3380,12 @@ globalParsTrace<-function(runInfoObj, parameters = "nClusters",plotBurnIn=FALSE,
         firstLine<-ifelse(reportBurnIn,nBurn/nFilter+2,1)
         lastLine<-(nSweeps+ifelse(reportBurnIn,nBurn+1,0))/nFilter
         rangeSweeps<-(nBurn/nFilter+1):((nBurn+nSweeps)/nFilter)
-        rangeParData<-1:(nSweeps/nFilter)	
-        
+        rangeParData<-1:(nSweeps/nFilter)
+
       }
     }
   }
-  
+
   if (parameters=="alpha" || parameters=="nClusters"){
     plot(rangeSweeps,parData[rangeParData,1],type="l",lty=1,col="red",ylab=ylabPar,xlab=xlabPars,cex.axis=1.5,cex.lab=1.5)
   } else if (parameters=="mpp"){
@@ -3333,34 +3393,34 @@ globalParsTrace<-function(runInfoObj, parameters = "nClusters",plotBurnIn=FALSE,
   } else if (parameters=="beta"){
     plot(rangeSweeps,parData[rangeParData,whichBeta],type="l",lty=1,col="red",ylab=ylabPar,xlab=xlabPars,cex.axis=1.5,cex.lab=1.5)
   }
-  
+
 }
 
 # plot posterior predictive densities
 plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR=FALSE){
-  
+
   # ignores fixed effects
-  
-  nPredictedSubjects=NULL	
+
+  nPredictedSubjects=NULL
   directoryPath=NULL
   fileStem=NULL
   yModel=NULL
   xModel=NULL
   logOddsRatio=NULL
   weibullFixedShape=NULL
-  
+
   for (i in 1:length(runInfoObj)) assign(names(runInfoObj)[i],runInfoObj[[i]])
   if (yModel!="Longitudinal"&&yModel!="Bernoulli"&&yModel!="Normal"&&yModel!="Survival"&&yModel!="MVN") stop("This function has been developed for Bernoulli, Normal, Survival, MVN and longitudinal responses only.")
   if (xModel=="Mixed") stop("This function has been developed for Discrete and Normal covariates only.")
   if (yModel=="Normal") logOR<-FALSE
-  
+
   #if (runInfoObj$nFixedEffects>0) print("Note that fixed effects are not processed in this function.")
   predictResponseFileName = file.path(runInfoObj$directoryPath,paste(runInfoObj$fileStem,'_predict.txt',sep=''))
   relScenarios<-read.table(predictResponseFileName,header=FALSE,skip=1)
-  
+
   # sistemare a seconda se logOR e' stato calcolato o no
   if (logOR==FALSE) {
-    preds<-predictions$predictedYPerSweep[,,1]		
+    preds<-predictions$predictedYPerSweep[,,1]
   } else {
     if (!is.null(predictions$logORPerSweep)){
       preds<-predictions$logORPerSweep
@@ -3368,13 +3428,13 @@ plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR
       stop("Log OR (odds ratios) cannot be plotted because they have not been computed by calcPredictions. Re-run calcPredictions with option fullSweepLogOR=TRUE.")
     }
   }
-  
+
   # output file
   pdf(outfile,onefile=TRUE)
-  
+
   # Relevant scenarios
   nPredictSubjects<-runInfoObj$nPredictSubjects
-  
+
   if(yModel=='Longitudinal'){##//RJ
     stdev <- c()
     for(i in 1:nPredictSubjects)
@@ -3398,7 +3458,7 @@ plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR
     plotLayout<-grid.layout(ncol = nOutcomes, nrow = 6)
 	grid.newpage()
   	pushViewport(viewport(layout = plotLayout))
-    for(j in 1:nOutcomes){ 
+    for(j in 1:nOutcomes){
       # Plot the means
       muMat<-predictions$predictedYPerSweep[,,j]
       muLower<-apply(muMat,2,quantile,0.01)
@@ -3431,7 +3491,7 @@ plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR
         theme(plot.margin=unit(c(0.5,ifelse(j==nOutcomes,1,0),0.5,ifelse(j==1,0.5,0)),'lines'))+
         theme(plot.margin=unit(c(0,0,0,0),'lines'))
       print(plotObj,vp=viewport(layout.pos.row=1:3,layout.pos.col=j))
-      
+
       # Plot the variances
       sigmaMat<-sqrt(predictions$predictedYVarPerSweep[,,j])
       sigmaMeans<-apply(sigmaMat,2,mean)
@@ -3443,7 +3503,7 @@ plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR
                             "lowerSigma"=rep(sigmaLower,each=dim(sigmaMat)[1]),
                             "upperSigma"=rep(sigmaUpper,each=dim(sigmaMat)[1]),
                             "meanSigma"=rep(sigmaMean,each=dim(sigmaMat)[1]))
-        
+
       plotObj<-ggplot(plotDF)
       plotObj<-plotObj+geom_hline(aes(x=as.factor(Subject),y=sigma,yintercept=meanSigma))
       plotObj<-plotObj+geom_boxplot(aes(x=as.factor(Subject),y=sigma,fill=as.factor(Subject)),outlier.size=0.5)
@@ -3466,7 +3526,7 @@ plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR
     for(i in 1:nPredictSubjects){
       denObj[[i]]<-density(na.omit(preds[,i]))#,bw=0.8) # removed over smoothing of predictions
     }
-    
+
     for(k in 1:nPredictSubjects){
       plotDF<-data.frame('logOddsRatio'=denObj[[k]]$x,'density'=denObj[[k]]$y)
       plotObj<-ggplot(plotDF)
@@ -3482,7 +3542,7 @@ plotPredictions<-function(outfile="condDensity.pdf",runInfoObj,predictions,logOR
 
 #.onAttach <- function(...) {
 #	message("I need to collect case studies of the usage of the package PReMiuM. I would really appreciate if you could email me at liveranis@gmail.com if you use the package.")
-# I need to collect case studies of the impact of my work (including developing and maintaining the package PReMiuM). I would really appreciate if you could email me at liveranis@gmail.com if you use the package.\n 
+# I need to collect case studies of the impact of my work (including developing and maintaining the package PReMiuM). I would really appreciate if you could email me at liveranis@gmail.com if you use the package.\n
 #	packageStartupMessage("Help support the development of PReMiuM: please share how PReMiuM is helping your work. Visit http://www.silvialiverani.com/support-premium/ or email liveranis@gmail.com.")
 #\}
 

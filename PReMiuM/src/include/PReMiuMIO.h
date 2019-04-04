@@ -84,6 +84,7 @@ pReMiuMOptions processCommandLine(string inputStr){
 	bool wasError=false;
 	if(argc>1){
 		string inString = inputStrings[currArg];
+
 		if(inString.compare("--help")==0){
 			// Output help if requested
 			Rprintf("\n\n ### PReMiuMpp Help Page. ### \n\n");
@@ -112,6 +113,10 @@ pReMiuMOptions processCommandLine(string inputStr){
 			Rprintf("--entropy\n\tIf included then we compute allocation entropy (not included)\n");
 			Rprintf("--predictType=<string>\n\tThe type of predictions to be used 'RaoBlackwell' or 'random' (RaoBlackwell)\n");
 			Rprintf("--weibullFixedShape=<bool>\n\tWhether the shape parameter of the Weibull distribution is fixed.\n");
+			Rprintf("--kernel=<string>\n\tThe kernel type for the covariance function of the GP if yModel == Longitudinal. Options are\n\tcurrently 'SQexponential' and 'Quadratic' (SQexponential)\n");
+			Rprintf("--sampleGPmean=<string>\n\tIndicator for the sampling of the mean of the GP, if yModel == Longitudinal.\n");
+			Rprintf("--ratio_v=<string>\n\t Ratio between L1k and L3k defining the variance of the GP, if yModel == Longitudinal.\n");
+
 		}else{
 			while(currArg < argc){
 				inString.assign(inputStrings[currArg]);
@@ -177,11 +182,11 @@ pReMiuMOptions processCommandLine(string inputStr){
 					}
 					options.outcomeType(outcomeType);
 					if(outcomeType.compare("Normal")==0&&options.responseExtraVar()){
-						Rprintf("Response extra variation not permitted with Normal response\n");			
+						Rprintf("Response extra variation not permitted with Normal response\n");
 						options.responseExtraVar(false);
 					}
 					if(outcomeType.compare("Survival")==0&&options.responseExtraVar()){
-						Rprintf("Response extra variation not permitted with Survival response\n");			
+						Rprintf("Response extra variation not permitted with Survival response\n");
 						options.responseExtraVar(false);
 					}
 					//RJ cannot have Longitudinal or MVN and Response Extra Variation
@@ -189,6 +194,22 @@ pReMiuMOptions processCommandLine(string inputStr){
 						Rprintf("Response extra variation not permitted with Longitudinal response\n");
 						options.responseExtraVar(false);
 					}
+				}else if(inString.find("--kernel")!=string::npos){ //AR
+				  size_t pos = inString.find("=")+1;
+				  string kernelType = inString.substr(pos,inString.size()-pos);
+				  if(kernelType.compare("SQexponential")!=0&&kernelType.compare("Quadratic")!=0){
+				    // Illegal covariate type entered
+				    wasError=true;
+				    break;
+				  }
+				  options.kernelType(kernelType);
+				}else if(inString.find("--sampleGPmean")!=string::npos){ //AR
+				  options.sampleGPmean(true);
+				}else if(inString.find("--ratio_v")!=string::npos){ //AR
+				  size_t pos = inString.find("=")+1;
+				  string tmpStr = inString.substr(pos,inString.size()-pos);
+				  double ratio=(double)atof(tmpStr.c_str());
+				  options.ratio(ratio);
 				}else if(inString.find("--xModel")!=string::npos){
 					size_t pos = inString.find("=")+1;
 					string covariateType = inString.substr(pos,inString.size()-pos);
@@ -229,9 +250,9 @@ pReMiuMOptions processCommandLine(string inputStr){
 					options.dPitmanYor(dPitmanYor);
 				}else if(inString.find("--excludeY")!=string::npos){
 					options.includeResponse(false);
-                		}else if(inString.find("--includeCAR")!=string::npos){
+        }else if(inString.find("--includeCAR")!=string::npos){
 					options.includeCAR(true);
-        		        }else if(inString.find("--neighbours")!=string::npos){
+        }else if(inString.find("--neighbours")!=string::npos){
 					size_t pos = inString.find("=")+1;
 					string neighboursFile = inString.substr(pos,inString.size()-pos);
 					options.neighbourFileName(neighboursFile);
@@ -287,14 +308,14 @@ pReMiuMOptions processCommandLine(string inputStr){
 	//	Rprintf("to get help on correct usage.\n");
 	//	exit(-1);
 	}
-	
+
 	return options;
 
 }
 
 // Read the PReMiuM data set
 void importPReMiuMData(const string& fitFilename,const string& predictFilename, const string& neighboursFilename, pReMiuMData& dataset){
-	
+
 	ifstream inputFile,predictFile;
 	inputFile.open(fitFilename.c_str());
 	if(!inputFile.is_open()){
@@ -310,6 +331,7 @@ void importPReMiuMData(const string& fitFilename,const string& predictFilename, 
 	}
 	unsigned int& nSubjects=dataset.nSubjects();
 	unsigned int& nTimes=dataset.nTimes();
+	unsigned int& nTimes_unique=dataset.nTimes_unique(); //AR
 	unsigned int& nCovariates=dataset.nCovariates();
 	unsigned int& nDiscreteCovs=dataset.nDiscreteCovs();
 	unsigned int& nContinuousCovs=dataset.nContinuousCovs();
@@ -332,6 +354,8 @@ void importPReMiuMData(const string& fitFilename,const string& predictFilename, 
 	string covariateType = dataset.covariateType();
 	//RJ add vectors for times, tStart, tStop
 	vector<double>& times=dataset.times();
+	vector<double>& times_corr=dataset.times_corr(); //AR
+	vector<double>& times_unique=dataset.times_unique(); //AR
 	vector<int>& tStart=dataset.tStart();
 	vector<int>& tStop=dataset.tStop();
 	vector<double>& logOffset=dataset.logOffset();
@@ -345,7 +369,7 @@ void importPReMiuMData(const string& fitFilename,const string& predictFilename, 
 
 	// Get the number of subjects
 	inputFile >> nSubjects;
-	
+
 	// Get the number of covariates
 	inputFile >> nCovariates;
 	//RJ get nTimes from inputFile
@@ -416,6 +440,7 @@ void importPReMiuMData(const string& fitFilename,const string& predictFilename, 
 	times.resize(nTimes);
 	tStart.resize(nSubjects);
 	tStop.resize(nSubjects);
+	times_corr.resize(nTimes);
 	discreteX.resize(nSubjects+nPredictSubjects);
 	continuousX.resize(nSubjects+nPredictSubjects);
 	W.resize(nSubjects);
@@ -519,8 +544,16 @@ void importPReMiuMData(const string& fitFilename,const string& predictFilename, 
 				equalTimes = 0;
 			}
 		}
+		//AR Read in timepoints and longitudinal data
+		inputFile >> nTimes_unique;
+		times_unique.resize(nTimes_unique);
+		for(unsigned int i=0; i<nTimes_unique; i++){
+		  inputFile >> times_unique[i];
+		}
+		for(unsigned int i=0; i<nTimes; i++){
+		  inputFile >> times_corr[i];
+		}
 	}
-	
 
 	for(unsigned int i=nSubjects;i<nSubjects+nPredictSubjects;i++){
 		if(covariateType.compare("Discrete")==0 || covariateType.compare("Normal")==0){
@@ -628,7 +661,7 @@ void importPReMiuMData(const string& fitFilename,const string& predictFilename, 
         }
         neighFile.close();
 	}
-	
+
 	// Return if there was an error
 	if(wasError){
 		Rprintf("Please use:\n");
@@ -814,6 +847,11 @@ void readHyperParamsFromFile(const string& filename,pReMiuMHyperParams& hyperPar
 			string tmpStr = inString.substr(pos,inString.size()-pos);
 			double muL = (double)atof(tmpStr.c_str());
 			hyperParams.muL(2,muL);
+		}else if(inString.find("muL_time")==0){
+		  size_t pos = inString.find("=")+1;
+		  string tmpStr = inString.substr(pos,inString.size()-pos);
+		  double muL = (double)atof(tmpStr.c_str());
+		  hyperParams.muL(3,muL);
 		}else if(inString.find("sigmaL_signal")==0){
 			size_t pos = inString.find("=")+1;
 			string tmpStr = inString.substr(pos,inString.size()-pos);
@@ -829,6 +867,11 @@ void readHyperParamsFromFile(const string& filename,pReMiuMHyperParams& hyperPar
 			string tmpStr = inString.substr(pos,inString.size()-pos);
 			double sigmaL = (double)atof(tmpStr.c_str());
 			hyperParams.sigmaL(2,sigmaL);
+		}else if(inString.find("sigmaL_time")==0){
+		  size_t pos = inString.find("=")+1;
+		  string tmpStr = inString.substr(pos,inString.size()-pos);
+		  double sigmaL = (double)atof(tmpStr.c_str());
+		  hyperParams.sigmaL(3,sigmaL);
 		}else if(inString.find("MVNmu0")==0){
 			size_t pos = inString.find("=")+1;
 			string tmpStr = inString.substr(pos,inString.size()-pos);
@@ -998,7 +1041,7 @@ void readHyperParamsFromFile(const string& filename,pReMiuMHyperParams& hyperPar
 		}
 
 	}
-	
+
 	// Return if there was an error
 	if(wasError){
 		Rprintf("There is a mistake in the arguments provided in profRegr.\n");
@@ -1015,10 +1058,12 @@ void readHyperParamsFromFile(const string& filename,pReMiuMHyperParams& hyperPar
 void initialisePReMiuM(baseGeneratorType& rndGenerator,
 				const mcmcModel<pReMiuMParams,pReMiuMOptions,pReMiuMData>& model,
 				pReMiuMParams& params){
-	
+
 	const pReMiuMData& dataset = model.dataset();
+  const string kernelType=model.options().kernelType(); //AR
 	const pReMiuMOptions& options = model.options();
 	pReMiuMHyperParams& hyperParams = params.hyperParams();
+	unsigned int nTimes_unique = dataset.nTimes_unique();
 
 	unsigned int nSubjects=dataset.nSubjects();
 	//RJ add int nTimes
@@ -1057,9 +1102,9 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 	// Allocate the right sizes for each of the parameter variables
 	// This also switches "on" all variable indicators (gamma)
 	// This gets changed below if variable selection is being done
-	params.setSizes(nSubjects,nCovariates,nDiscreteCovs,nContinuousCovs,nFixedEffects,nCategoriesY,	nPredictSubjects,nTimes,nCategories,nClusInit,covariateType,outcomeType,weibullFixedShape);
+	params.setSizes(nSubjects,nCovariates,nDiscreteCovs,nContinuousCovs,nFixedEffects,nCategoriesY,	nPredictSubjects,nTimes,nTimes_unique,nCategories,nClusInit,covariateType,outcomeType,weibullFixedShape,kernelType); //AR
 	unsigned int maxNClusters=params.maxNClusters();
-	
+
 	// Define a uniform random number generator
 	randomUniform unifRand(0,1);
 
@@ -1085,7 +1130,7 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 		if(computedBound>maxNClusters){
 			maxNClusters=computedBound;
 		}
-		params.maxNClusters(maxNClusters,covariateType,outcomeType);
+		params.maxNClusters(maxNClusters,covariateType,outcomeType,kernelType, nTimes_unique);//AR
 	}
 
 	// Copy the dataset X matrix to a working object in params
@@ -1099,11 +1144,11 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 	if(options.fixedAlpha()>-1){
 		alpha=options.fixedAlpha();
 	}
-	params.alpha(alpha);	
-	
+	params.alpha(alpha);
+
 
 	double dPitmanYor = options.dPitmanYor();
-	params.dPitmanYor(dPitmanYor);	
+	params.dPitmanYor(dPitmanYor);
 
 	vector<unsigned int> nXInCluster(maxNClusters,0);
 	unsigned int maxZ=0;
@@ -1131,7 +1176,7 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 			}
 		}
 	}
-	
+
 	params.workNXInCluster(nXInCluster);
 	params.workMaxZi(maxZ);
 
@@ -1236,7 +1281,7 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 			}
 		}
 
-		params.maxNClusters(maxNClusters,covariateType,outcomeType);
+		params.maxNClusters(maxNClusters,covariateType,outcomeType,kernelType, nTimes_unique);
 		params.v(vNew);
 		params.logPsi(logPsiNew);
 	}
@@ -1572,19 +1617,16 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 
 	if(includeResponse){
 		// Finally we sample the theta and beta values from uniform distributions
-		for(unsigned int c=0;c<maxNClusters;c++){
-			for (unsigned int k=0;k<nCategoriesY;k++){
-				// Thetas are randomly between -2 and 2
-				params.theta(c,k,-2.0+4.0*unifRand(rndGenerator));
-			}
-		}
-
-		for(unsigned int j=0;j<nFixedEffects;j++){
-			for (unsigned int k=0;k<nCategoriesY;k++){
-				// Betas are randomly between -2 and 2
-				params.beta(j,k,-2.0+4.0*unifRand(rndGenerator));
-			}
-		}
+		  for(unsigned int j=0;j<nFixedEffects;j++){
+		    for (unsigned int k=0;k<nCategoriesY;k++){
+		      // Betas are randomly between -2 and 2
+		      if(outcomeType.compare("Longitudinal")!=0){ //AR
+		        params.beta(j,k,-2.0+4.0*unifRand(rndGenerator));
+		      }else{
+		        params.beta(j,k,0);
+		      }
+		    }
+		  }
 
 		if(outcomeType.compare("Normal")==0){
 			randomGamma gammaRand(hyperParams.shapeSigmaSqY(),1.0/hyperParams.scaleSigmaSqY());
@@ -1649,17 +1691,33 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 				params.MVNTau(c,Tau);
 			}
 		}
-		
+
 		//RJ populate params.L
 		if(outcomeType.compare("Longitudinal")==0){
+		  unsigned int nL;
+		  if(kernelType.compare("SQexponential")==0){ //AR
+        nL=3;
+		  }else{
+		    nL=4;
+		  }
+
 			for (unsigned int c=0;c<maxNClusters;c++){
-				for(unsigned int l=0;l<3;l++){
+				for(unsigned int l=0;l<nL;l++){
 					randomNormal normalRand(hyperParams.muL(l),hyperParams.sigmaL(l));
 					params.L(c,l,normalRand(rndGenerator));
 				}
+
+				if(options.sampleGPmean()){ //AR
+				  VectorXd Fval(dataset.nTimes_unique());
+
+				  Fval =  Sample_GPmean(params, dataset, c, rndGenerator,1);
+				  for(unsigned int j=0;j<dataset.nTimes_unique();j++){
+				    params.meanGP(c,j, Fval(j));
+				  }
+				}
 			}
 		}
-		
+
 		// And also the extra variation values if necessary
 		if(responseExtraVar){
 			// Shape and rate parameters
@@ -1710,13 +1768,12 @@ void initialisePReMiuM(baseGeneratorType& rndGenerator,
 	     }
 
 	}
-	
+
 }
 
 // Write the sampler output
 void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropParams,pReMiuMData>& sampler,
 								const unsigned int& sweep){
-
 
 	bool reportBurnIn = sampler.reportBurnIn();
 	unsigned int nBurn = sampler.nBurn();
@@ -1741,6 +1798,7 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 		bool responseExtraVar = sampler.model().options().responseExtraVar();
 		double fixedAlpha = sampler.model().options().fixedAlpha();
 		string outcomeType = sampler.model().options().outcomeType();
+		string kernelType = sampler.model().dataset().kernelType();
 		bool computeEntropy = sampler.model().options().computeEntropy();
 		unsigned int nFixedEffects = params.nFixedEffects(outcomeType);
 		string varSelectType = sampler.model().options().varSelectType();
@@ -1813,6 +1871,11 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 				if(outcomeType.compare("Longitudinal")==0){
 					fileName = fileStem + "_L.txt";
 					outFiles.push_back(new ofstream(fileName.c_str()));
+					if(sampler.model().options().sampleGPmean()){//AR
+					  fileName = fileStem + "_meanGP.txt";
+					  outFiles.push_back(new ofstream(fileName.c_str()));
+					}
+
 				}
 				if(outcomeType.compare("MVN")==0){
 					fileName = fileStem + "_MVNmu.txt";
@@ -1869,7 +1932,7 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 		int nClustersInd=-1,psiInd=-1,phiInd=-1,muInd=-1,SigmaInd=-1,zInd=-1,entropyInd=-1,alphaInd=-1;
 		int logPostInd=-1,nMembersInd=-1,alphaPropInd=-1;
 		//RJ add L and MVN to indices
-		int thetaInd=-1,betaInd=-1,thetaPropInd=-1,betaPropInd=-1,sigmaSqYInd=-1,nuInd=-1,LInd=-1,MVNmuInd=-1,MVNSigmaInd=-1,epsilonInd=-1;
+		int thetaInd=-1,betaInd=-1,thetaPropInd=-1,betaPropInd=-1,sigmaSqYInd=-1,nuInd=-1,LInd=-1,meanGPInd=-1,MVNmuInd=-1,MVNSigmaInd=-1,epsilonInd=-1;
 		int sigmaEpsilonInd=-1,epsilonPropInd=-1,omegaInd=-1,rhoInd=-1;
 		int rhoOmegaPropInd=-1,gammaInd=-1,nullPhiInd=-1,nullMuInd=-1;
 		int predictThetaRaoBlackwellInd=-1;
@@ -1910,6 +1973,8 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 			}
 			if(outcomeType.compare("Longitudinal")==0){//RJ
 				LInd=r++;
+			  if(sampler.model().options().sampleGPmean())
+			    meanGPInd=r++;//AR
 			}
 			if(outcomeType.compare("MVN")==0){//RJ
 				MVNmuInd=r++;
@@ -1948,7 +2013,6 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 
 
 		*(outFiles[nClustersInd]) << maxNClusters << endl;
-
 		unsigned int sumMembers=0;
 		for(unsigned int c=0;c<maxNClusters;c++){
 			// Print logPsi
@@ -1963,7 +2027,8 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 						}
 					}
 				} else {
-					*(outFiles[thetaInd]) << params.theta(c,0);
+					//if(outcomeType.compare("Longitudinal")!=0)
+					  *(outFiles[thetaInd]) << params.theta(c,0);
 				}
 			}
 			// Print number of members of each cluster
@@ -1973,13 +2038,15 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 			if(c<maxNClusters-1){
 				*(outFiles[psiInd]) << " ";
 				if(includeResponse){
-					*(outFiles[thetaInd]) << " ";
+				  //if(outcomeType.compare("Longitudinal")!=0)
+				    *(outFiles[thetaInd]) << " ";
 				}
 				*(outFiles[nMembersInd]) << " ";
 			}else{
 				*(outFiles[psiInd]) << endl;
 				if(includeResponse){
-					*(outFiles[thetaInd]) << endl;
+				  //if(outcomeType.compare("Longitudinal")!=0)
+					  *(outFiles[thetaInd]) << endl;
 				}
 				*(outFiles[nMembersInd]) << " " << sumMembers << endl;
 			}
@@ -2123,34 +2190,51 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 							}else{
 								*(outFiles[nuInd]) << endl;
 							}
-						}				
+						}
 					}
 				}
 				if(outcomeType.compare("Longitudinal")==0){
 				//RJ Print parameter L for each cluster
 					for(unsigned int c=0;c<maxNClusters;c++){
-						for(unsigned int l=0;l<3;l++){
+					  unsigned int nL;
+					  if(kernelType.compare("SQexponential")==0){
+              nL=3;
+					  }else{
+					    nL=4;
+					  }
+						for(unsigned int l=0;l<nL;l++){
 							*(outFiles[LInd]) << params.L(c,l);
-							if(c<maxNClusters-1 || l<2){
+							if(c<(maxNClusters-1) || l<(nL-1)){
 								*(outFiles[LInd]) << " ";
 							}else{
 								*(outFiles[LInd]) << endl;
 							}
 						}
+						if(sampler.model().options().sampleGPmean()){ //AR
+						  for(unsigned int l=0;l<dataset.nTimes_unique();l++){
+						    *(outFiles[meanGPInd]) << params.meanGP(c,l)<< " ";
+						    if(c<(maxNClusters-1) || l<(dataset.nTimes_unique()-1)){
+						      *(outFiles[meanGPInd]) << " ";
+						    }else{
+						      *(outFiles[meanGPInd]) << endl;
+						    }
+						  }
+						}
 					}
 				}
 				if(outcomeType.compare("MVN")==0){
 				//RJ Print MVN parameters for each cluster
-					for(unsigned int c=0;c<maxNClusters;c++){
+					for(unsigned int c=0;c< maxNClusters;c++){
 						for(unsigned int l=0;l<nOutcomes;l++){
-							*(outFiles[MVNmuInd]) << params.MVNmu(c,l);
+						  *(outFiles[MVNmuInd]) << " "<< params.MVNmu(c,l);
+						  //*(outFiles[MVNmuInd]) << " "<<sweep << " c "<< c << " l "<< l << " maxNClusters " << maxNClusters << " nOutcomes " << nOutcomes << " p "<< params.MVNmu(c,l)<<endl;//RJ!!params.MVNmu(c,l);
 							if(c<maxNClusters-1 || l<(nOutcomes-1)){
 								*(outFiles[MVNmuInd]) << " ";
 							}else{
 								*(outFiles[MVNmuInd]) << endl;
 							}
 							for(unsigned int l2=0;l2<=l;l2++){
-								*(outFiles[MVNSigmaInd]) << params.MVNSigma(c,l,l2);
+								*(outFiles[MVNSigmaInd]) << ""<<params.MVNSigma(c,l,l2);//RJ!!params.MVNSigma(c,l,l2);
 								if(c<maxNClusters-1 || l2<(nOutcomes-1)){
 									*(outFiles[MVNSigmaInd]) << " ";
 								}else{
@@ -2290,9 +2374,8 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 				proposalParams.alphaAnyUpdates(false);
 			}
 		}
-
 		if(varSelectType.compare("None")!=0){
-			// Print variable selection related quantities
+		  // Print variable selection related quantities
 			for(unsigned int j=0;j<nCovariates;j++){
 				*(outFiles[omegaInd]) << params.omega(j);
 				*(outFiles[rhoInd]) << params.rho(j);
@@ -2304,7 +2387,7 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 					*(outFiles[omegaInd]) << endl;
 					*(outFiles[rhoInd]) << endl;
 				}
-				if(sweep!=0){ // this was "==0", it might be worth double checking 
+				if(sweep!=0){ // this was "==0", it might be worth double checking
 					if(covariateType.compare("Discrete")==0){
 						for(unsigned int p=0;p<maxNCategories;p++){
 							if(p<nCategories[j]){
@@ -2364,7 +2447,6 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 				}
 			}
 
-
 			anyUpdates = proposalParams.rhoAnyUpdates();
 			if(anyUpdates){
 				for(unsigned int j=0;j<nCovariates;j++){
@@ -2383,7 +2465,6 @@ void writePReMiuMOutput(mcmcSampler<pReMiuMParams,pReMiuMOptions,pReMiuMPropPara
 
 
 	}
-
 }
 
 string storeLogFileData(const pReMiuMOptions& options,
@@ -2446,6 +2527,12 @@ string storeLogFileData(const pReMiuMOptions& options,
 		tmpStr << "Include response: True" << endl;
 	}else{
 		tmpStr << "Include response: False" << endl;
+	}
+	if(dataset.outcomeType().compare("Longitudinal")==0){//AR
+	  tmpStr << "GP Kernel type:" << dataset.kernelType() << endl;
+  	if(options.sampleGPmean()){
+  	  tmpStr << "GP mean sampling: True" << endl;
+  	}
 	}
 	if(options.fixedAlpha()<=-1){
 		tmpStr << "Update alpha: True" << endl;
@@ -2531,11 +2618,17 @@ string storeLogFileData(const pReMiuMOptions& options,
 	//RJ write hypers to file
 	if(dataset.outcomeType().compare("Longitudinal")==0){
 		tmpStr << "muL: " ;
-		for(int l=0; l<3; l++) 
+	  unsigned int nL;
+	  if(dataset.kernelType().compare("SQexponential")==0){
+      nL=3;
+	  }else{
+	    nL=4;
+	  }
+		for(int l=0; l<nL; l++)
 			tmpStr << hyperParams.muL(l)  << " ";
 		tmpStr << endl;
 		tmpStr << "sigmaL: " ;
-		for(int l=0; l<3; l++) 
+		for(int l=0; l<nL; l++)
 			tmpStr <<  hyperParams.sigmaL(l) << " ";
 		tmpStr << endl;
 	}

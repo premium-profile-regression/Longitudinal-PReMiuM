@@ -50,9 +50,13 @@
 #include<PReMiuMIO.h>
 
 #include "include/postProcess.h"
-
+//#include <stdlib.h> srand(seed)
 #include<Rcpp.h>
 
+
+
+#include<unistd.h>
+#include<stdio.h>
 using std::vector;
 using std::ostringstream;
 using std::time;
@@ -61,7 +65,7 @@ using std::string;
 RcppExport SEXP profRegr(SEXP inputString) {
 
 	string inputStr = Rcpp::as<string>(inputString);
-	
+
 	/* ---------- Start the timer ------------------*/
 	time_t beginTime,currTime;
 	beginTime = time(NULL);
@@ -72,23 +76,24 @@ RcppExport SEXP profRegr(SEXP inputString) {
 	// Initialise the sampler object
 	mcmcSampler<pReMiuMParams,pReMiuMOptions,
 				pReMiuMPropParams,pReMiuMData> pReMiuMSampler;
-	
+
 	// Set the options
 	pReMiuMSampler.options(options);
-	
+
 	// Set the model
 	pReMiuMSampler.model(&importPReMiuMData,&initialisePReMiuM,
 							&pReMiuMLogPost,true);
-	
+
 	// Set the missing data function
 	pReMiuMSampler.updateMissingDataFn(&updateMissingPReMiuMData);
-	
+
 	// Add the function for writing output
 	pReMiuMSampler.userOutputFn(&writePReMiuMOutput);
-	
+
 	// Seed the random number generator
-	
+
 	pReMiuMSampler.seedGenerator(options.seed());
+	//pReMiuMSampler.seedGeneratorMult(options.seedsMult());
 
 	// Set the sampler specific variables
 	pReMiuMSampler.nSweeps(options.nSweeps());
@@ -99,6 +104,7 @@ RcppExport SEXP profRegr(SEXP inputString) {
 
 	/* ---------- Read in the data -------- */
 	pReMiuMSampler.model().dataset().outcomeType(options.outcomeType());
+	pReMiuMSampler.model().dataset().kernelType(options.kernelType());//AR
 	pReMiuMSampler.model().dataset().covariateType(options.covariateType());
 	pReMiuMSampler.model().dataset().includeCAR(options.includeCAR());
 	pReMiuMSampler.importData(options.inFileName(),options.predictFileName(),options.neighbourFileName());
@@ -108,9 +114,9 @@ RcppExport SEXP profRegr(SEXP inputString) {
 
 	// Set the proposal parameters
 	pReMiuMPropParams proposalParams(options.nSweeps(),dataset.nCovariates(),
-										dataset.nFixedEffects(),dataset.nCategoriesY());
+										dataset.nFixedEffects(),dataset.nCategoriesY(),dataset.kernelType());
 	pReMiuMSampler.proposalParams(proposalParams);
-	
+
 	// The gibbs update for the active V
 	pReMiuMSampler.addProposal("gibbsForVActive",1.0,1,1,&gibbsForVActive);
 
@@ -162,13 +168,13 @@ RcppExport SEXP profRegr(SEXP inputString) {
 			// Gibbs update for gamma
 			pReMiuMSampler.addProposal("gibbsForGammaActive",1.0,1,firstSweep,&gibbsForGammaActive);
 		}
-
 	}
-	
+
 
 	if(options.includeResponse()){
 		// The Metropolis Hastings update for the active theta
-		pReMiuMSampler.addProposal("metropolisHastingsForThetaActive",1.0,1,1,&metropolisHastingsForThetaActive);
+		if(options.outcomeType().compare("Longitudinal")!=0) //AR
+		  pReMiuMSampler.addProposal("metropolisHastingsForThetaActive",1.0,1,1,&metropolisHastingsForThetaActive);
 
 		// Adaptive MH for beta
 		if(dataset.nFixedEffects()>0){
@@ -208,7 +214,7 @@ RcppExport SEXP profRegr(SEXP inputString) {
 			pReMiuMSampler.addProposal("gibbsForMVNTauActive",1.0,1,1,&gibbsForMVNTauActive);
 		}
 	}
-	
+
 	// The Metropolis Hastings update for labels
 	if(options.whichLabelSwitch().compare("123")==0){
 		pReMiuMSampler.addProposal("metropolisHastingsForLabels123",1.0,1,1,&metropolisHastingsForLabels123);
@@ -216,7 +222,7 @@ RcppExport SEXP profRegr(SEXP inputString) {
 		pReMiuMSampler.addProposal("metropolisHastingsForLabels12",1.0,1,1,&metropolisHastingsForLabels12);
 	} else if(options.whichLabelSwitch().compare("3")==0){
 		pReMiuMSampler.addProposal("metropolisHastingsForLabels3",1.0,1,1,&metropolisHastingsForLabels3);
-	} 
+	}
 	// Gibbs for U
 	if(options.samplerType().compare("Truncated")!=0){
 		pReMiuMSampler.addProposal("gibbsForU",1.0,1,1,&gibbsForU);
@@ -282,7 +288,9 @@ RcppExport SEXP profRegr(SEXP inputString) {
 
 	if(options.includeResponse()){
 		// The Metropolis Hastings update for the inactive theta
-		pReMiuMSampler.addProposal("gibbsForThetaInActive",1.0,1,1,&gibbsForThetaInActive);
+		if(options.outcomeType().compare("Longitudinal")!=0) //AR
+		  pReMiuMSampler.addProposal("gibbsForThetaInActive",1.0,1,1,&gibbsForThetaInActive);
+
 		if(options.outcomeType().compare("Survival")==0&&!options.weibullFixedShape()) {
 			pReMiuMSampler.addProposal("gibbsForNuInActive",1.0,1,1,&gibbsForNuInActive);
 		}
@@ -326,9 +334,11 @@ RcppExport SEXP profRegr(SEXP inputString) {
 	/* ---------- Write the log file ------------- */
 	// The standard log file
 	pReMiuMSampler.writeLogFile();
-	
+
 	/* ---------- Initialise the chain ---- */
+
 	pReMiuMSampler.initialiseChain();
+
 	pReMiuMHyperParams hyperParams = pReMiuMSampler.chain().currentState().parameters().hyperParams();
 	unsigned int nClusInit = pReMiuMSampler.chain().currentState().parameters().workNClusInit();
 
